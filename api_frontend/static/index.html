@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transcription API — Test</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      background: #f5f5f5;
+      color: #222;
+      padding: 32px 24px;
+    }
+
+    h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+    .subtitle { color: #666; font-size: 13px; margin-bottom: 24px; }
+    h2 { font-size: 11px; font-weight: 600; text-transform: uppercase;
+         letter-spacing: .06em; color: #888; margin-bottom: 10px; }
+
+    .card {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .form-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    select, input[type=text], input[type=number] {
+      padding: 7px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+      background: #fff;
+    }
+    select     { flex: 1; min-width: 220px; max-width: 460px; }
+    input[type=text] { width: 260px; font-family: monospace; }
+    input[type=file] {
+      font-size: 13px;
+      padding: 5px 0;
+      flex: 1;
+      min-width: 220px;
+      max-width: 460px;
+    }
+    label { font-size: 13px; color: #444; white-space: nowrap; }
+
+    .source-toggle { display: flex; gap: 0; margin-bottom: 10px; border: 1px solid #d1d5db; border-radius: 5px; overflow: hidden; width: fit-content; }
+    .source-toggle label {
+      padding: 6px 16px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #374151;
+      background: #f9fafb;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .source-toggle input[type=radio] { display: none; }
+    .source-toggle input[type=radio]:checked + label {
+      background: #2563eb;
+      color: #fff;
+    }
+
+    .api-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+    .api-row label { color: #666; }
+    .api-row input { flex: 1; max-width: 300px; }
+
+    .settings { margin-top: 14px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+    .settings label { display: flex; align-items: center; gap: 6px; }
+
+    button {
+      padding: 8px 20px;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      background: #2563eb;
+      color: #fff;
+      transition: background .15s;
+    }
+    button:hover:not(:disabled) { background: #1d4ed8; }
+    button:disabled { background: #93c5fd; cursor: default; }
+    .btn-secondary {
+      background: #f3f4f6; color: #374151;
+      border: 1px solid #d1d5db;
+    }
+    .btn-secondary:hover:not(:disabled) { background: #e5e7eb; }
+
+    #status { font-size: 13px; color: #555; margin-top: 12px; min-height: 18px; }
+    #status.error { color: #dc2626; }
+
+    /* Summary */
+    .summary-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+    .stat {
+      background: #f8f8f8;
+      border: 1px solid #e8e8e8;
+      border-radius: 5px;
+      padding: 10px 16px;
+      min-width: 110px;
+    }
+    .stat-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: .04em; }
+    .stat-value { font-size: 22px; font-weight: 600; margin-top: 2px; }
+
+    /* Speaker chips */
+    .speakers { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 0; }
+    .speaker-chip {
+      border-radius: 5px;
+      padding: 8px 14px;
+      font-size: 12px;
+      border: 1px solid transparent;
+    }
+    .speaker-chip strong { display: block; font-size: 13px; margin-bottom: 2px; }
+
+    /* Segments table */
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: #888;
+      padding: 6px 10px;
+      border-bottom: 1px solid #e8e8e8;
+    }
+    td { padding: 9px 10px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    .time { font-variant-numeric: tabular-nums; white-space: nowrap; color: #666; font-size: 12px; }
+    .seg-play-btn {
+      background: none;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      color: #374151;
+      line-height: 1;
+    }
+    .seg-play-btn:hover:not(:disabled) { background: #f3f4f6; }
+    .seg-play-btn.playing { background: #eff6ff; border-color: #bfdbfe; color: #2563eb; }
+    .text-cell { line-height: 1.5; }
+    .text-cell.inaudible { color: #aaa; font-style: italic; }
+
+    /* Transcript view */
+    .transcript-turn { margin-bottom: 20px; }
+    .transcript-turn:last-child { margin-bottom: 0; }
+    .turn-speaker {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .06em; margin-bottom: 5px; display: block;
+    }
+    .turn-text { line-height: 1.9; }
+    .seg-span {
+      border-radius: 3px;
+      padding: 1px 4px;
+      cursor: pointer;
+      transition: filter .12s;
+    }
+    .seg-span:hover { filter: brightness(.88); }
+    .seg-span.active { outline: 2px solid currentColor; outline-offset: 1px; }
+    .seg-span.inaudible { color: #aaa; font-style: italic; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .lang-fry  { background: #ecfdf5; color: #065f46; }
+    .lang-nld  { background: #eff6ff; color: #1e40af; }
+    .lang-null { background: #f3f4f6; color: #9ca3af; }
+
+    :root {
+      --spk0: #2563eb; --spk0-bg: #eff6ff; --spk0-border: #bfdbfe;
+      --spk1: #16a34a; --spk1-bg: #f0fdf4; --spk1-border: #bbf7d0;
+      --spk2: #d97706; --spk2-bg: #fffbeb; --spk2-border: #fde68a;
+      --spk3: #9333ea; --spk3-bg: #faf5ff; --spk3-border: #e9d5ff;
+      --spk4: #0891b2; --spk4-bg: #ecfeff; --spk4-border: #a5f3fc;
+      --spk5: #e11d48; --spk5-bg: #fff1f2; --spk5-border: #fecdd3;
+    }
+
+    /* JSON panels */
+    .json-panels { display: flex; gap: 16px; margin-bottom: 16px; }
+    .json-panel { flex: 1; min-width: 0; }
+    .json-panel h2 { margin-bottom: 6px; }
+    pre.json {
+      background: #1e1e2e;
+      color: #cdd6f4;
+      border-radius: 5px;
+      padding: 14px;
+      font-size: 12px;
+      font-family: "SF Mono", "Fira Code", monospace;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 400px;
+      overflow-y: auto;
+      margin: 0;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 13px; height: 13px;
+      border: 2px solid #93c5fd;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<h1>Transcription API — Test</h1>
+<p class="subtitle">Test interface for the transcription API service</p>
+
+<!-- Connection -->
+<div class="card">
+  <h2>API connection</h2>
+  <div class="api-row">
+    <label>API URL</label>
+    <input type="text" id="apiUrl" placeholder="http://localhost:8001">
+  </div>
+  <div class="api-row">
+    <label>API key</label>
+    <input type="password" id="apiKey" placeholder="leave blank if no key is set">
+    <button class="btn-secondary" id="loadBtn">Load files</button>
+  </div>
+
+  <!-- Source mode toggle -->
+  <div class="source-toggle" style="margin-top: 10px;">
+    <input type="radio" name="sourceMode" id="modeServer" value="server" checked>
+    <label for="modeServer">Server file</label>
+    <input type="radio" name="sourceMode" id="modeUpload" value="upload">
+    <label for="modeUpload">Upload file</label>
+  </div>
+
+  <!-- Server file selection -->
+  <div id="serverRow" class="form-row" style="margin-top: 6px;">
+    <select id="fileSelect" disabled>
+      <option value="">— load files first —</option>
+    </select>
+    <button id="submitBtn" disabled>Transcribe</button>
+  </div>
+
+  <!-- Upload file selection -->
+  <div id="uploadRow" class="form-row" style="display:none; margin-top: 6px;">
+    <input type="file" id="fileUpload" accept=".wav,.mp3,.flac,.ogg,.m4a,.aac">
+    <button id="submitUploadBtn" disabled>Transcribe</button>
+  </div>
+
+  <!-- Audio player -->
+  <div id="audioPlayerRow" style="display:none; margin-top: 14px;">
+    <audio id="audioPlayer" controls style="width: 100%; height: 36px;"></audio>
+  </div>
+
+  <!-- Language selection -->
+  <div class="settings" style="margin-top: 12px;">
+    <label style="font-size:13px; color:#444; margin-right:4px;">Language:</label>
+    <label><input type="radio" name="language" value="nld+fry" checked> NLD + FRY</label>
+    <label><input type="radio" name="language" value="fry"> Frisian only</label>
+    <label><input type="radio" name="language" value="nld"> Dutch only</label>
+  </div>
+
+  <!-- Recording context (hidden — passed as GENERAL by default) -->
+  <div style="display:none">
+    <input type="radio" name="recordingContext" value="GENERAL" checked>
+    <input type="radio" name="recordingContext" value="COUNCIL_MEETING">
+  </div>
+
+  <div id="status"></div>
+</div>
+
+<!-- JSON request / response -->
+<div id="jsonSection" style="display:none">
+  <div class="json-panels">
+    <div class="json-panel card">
+      <h2>Request</h2>
+      <pre class="json" id="jsonRequest"></pre>
+    </div>
+    <div class="json-panel card">
+      <h2>Response</h2>
+      <pre class="json" id="jsonResponse"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- Results -->
+<div id="results" style="display:none">
+
+  <div class="card">
+    <h2>Summary</h2>
+    <div class="summary-row">
+      <div class="stat">
+        <div class="stat-label">Speakers</div>
+        <div class="stat-value" id="nSpeakers">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Duration</div>
+        <div class="stat-value" id="duration">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Segments</div>
+        <div class="stat-value" id="nSegments">—</div>
+      </div>
+    </div>
+    <h2>Speakers</h2>
+    <div class="speakers" id="speakerChips"></div>
+  </div>
+
+  <div class="card">
+    <h2>Transcript</h2>
+    <div id="transcriptBody"></div>
+  </div>
+
+  <div class="card">
+    <h2>Segments</h2>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Time</th>
+          <th>Speaker</th>
+          <th>Lang</th>
+          <th>Transcription</th>
+        </tr>
+      </thead>
+      <tbody id="segmentsBody"></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+  const SPEAKER_COLORS = [
+    { color: 'var(--spk0)', bg: 'var(--spk0-bg)', border: 'var(--spk0-border)' },
+    { color: 'var(--spk1)', bg: 'var(--spk1-bg)', border: 'var(--spk1-border)' },
+    { color: 'var(--spk2)', bg: 'var(--spk2-bg)', border: 'var(--spk2-border)' },
+    { color: 'var(--spk3)', bg: 'var(--spk3-bg)', border: 'var(--spk3-border)' },
+    { color: 'var(--spk4)', bg: 'var(--spk4-bg)', border: 'var(--spk4-border)' },
+    { color: 'var(--spk5)', bg: 'var(--spk5-bg)', border: 'var(--spk5-border)' },
+  ];
+
+  const apiUrlInput     = document.getElementById('apiUrl');
+  const apiKeyInput     = document.getElementById('apiKey');
+  const fileSelect      = document.getElementById('fileSelect');
+  const loadBtn         = document.getElementById('loadBtn');
+  const submitBtn       = document.getElementById('submitBtn');
+  const submitUploadBtn = document.getElementById('submitUploadBtn');
+  const fileUpload      = document.getElementById('fileUpload');
+  const serverRow       = document.getElementById('serverRow');
+  const uploadRow       = document.getElementById('uploadRow');
+  const statusEl        = document.getElementById('status');
+  const resultsEl       = document.getElementById('results');
+  const jsonSection     = document.getElementById('jsonSection');
+  const jsonRequest     = document.getElementById('jsonRequest');
+  const jsonResponse    = document.getElementById('jsonResponse');
+
+  // ── Load API URL and key from /config ──────────────────────────────────────
+  fetch('/config')
+    .then(r => r.json())
+    .then(cfg => {
+      apiUrlInput.value = cfg.api_url;
+      if (cfg.api_key) apiKeyInput.value = cfg.api_key;
+    })
+    .catch(() => { apiUrlInput.value = 'http://localhost:8001'; });
+
+  // ── Source mode toggle ──────────────────────────────────────────────────────
+  document.querySelectorAll('input[name=sourceMode]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const isUpload = radio.value === 'upload';
+      serverRow.style.display = isUpload ? 'none' : '';
+      uploadRow.style.display = isUpload ? '' : 'none';
+      if (currentBlobUrl && isUpload) {
+        URL.revokeObjectURL(currentBlobUrl);
+        currentBlobUrl = null;
+        audioPlayerRow.style.display = 'none';
+        audioPlayer.src = '';
+      }
+    });
+  });
+
+  // ── Load file list ──────────────────────────────────────────────────────────
+  loadBtn.addEventListener('click', loadFiles);
+
+  function apiHeaders() {
+    const key = apiKeyInput.value.trim();
+    return key ? { 'X-API-Key': key } : {};
+  }
+
+  async function loadFiles() {
+    const base = apiUrlInput.value.replace(/\/$/, '');
+    loadBtn.disabled = true;
+    setStatus('<span class="spinner"></span>Loading files…');
+    try {
+      const resp = await fetch(`${base}/files`, { headers: apiHeaders() });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      fileSelect.innerHTML = '';
+      if (!data.files.length) {
+        fileSelect.innerHTML = '<option value="">No audio files found in AUDIO_BASE_DIR</option>';
+        setStatus('No audio files found.', true);
+        return;
+      }
+      data.files.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = opt.textContent = f;
+        fileSelect.appendChild(opt);
+      });
+      fileSelect.disabled = false;
+      submitBtn.disabled  = false;
+      setStatus(`${data.files.length} file${data.files.length !== 1 ? 's' : ''} loaded.`);
+      loadAudioPreview();
+    } catch (e) {
+      setStatus(`Could not reach API at ${base} — ${e.message}`, true);
+    } finally {
+      loadBtn.disabled = false;
+    }
+  }
+
+  // ── Audio player ───────────────────────────────────────────────────────────
+  const audioPlayerRow = document.getElementById('audioPlayerRow');
+  const audioPlayer    = document.getElementById('audioPlayer');
+  let currentBlobUrl   = null;
+
+  fileSelect.addEventListener('change', loadAudioPreview);
+
+  // When an upload file is chosen, show a local preview in the audio player
+  fileUpload.addEventListener('change', () => {
+    const f = fileUpload.files[0];
+    if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
+    if (!f) {
+      audioPlayerRow.style.display = 'none';
+      audioPlayer.src = '';
+      submitUploadBtn.disabled = true;
+      return;
+    }
+    currentBlobUrl = URL.createObjectURL(f);
+    audioPlayer.src = currentBlobUrl;
+    audioPlayerRow.style.display = 'block';
+    submitUploadBtn.disabled = false;
+  });
+
+  async function loadAudioPreview() {
+    const filename = fileSelect.value;
+    if (currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
+    if (!filename) { audioPlayerRow.style.display = 'none'; audioPlayer.src = ''; return; }
+
+    const base = apiUrlInput.value.replace(/\/$/, '');
+    const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
+    try {
+      const resp = await fetch(`${base}/audio/${encodedPath}`, { headers: apiHeaders() });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      currentBlobUrl = URL.createObjectURL(blob);
+      audioPlayer.src = currentBlobUrl;
+      audioPlayerRow.style.display = 'block';
+    } catch {
+      audioPlayerRow.style.display = 'none';
+    }
+  }
+
+  // ── Transcribe (server file) ────────────────────────────────────────────────
+  submitBtn.addEventListener('click', async () => {
+    const filename = fileSelect.value;
+    if (!filename) return;
+    const base = apiUrlInput.value.replace(/\/$/, '');
+
+    submitBtn.disabled = true;
+    resultsEl.style.display = 'none';
+    jsonSection.style.display = 'none';
+    setStatus('<span class="spinner"></span>Transcribing… (this may take a while)');
+
+    const reqBody = {
+      filename,
+      recording_context: document.querySelector('input[name=recordingContext]:checked').value,
+      language: document.querySelector('input[name=language]:checked').value,
+    };
+
+    try {
+      const resp = await fetch(`${base}/transcribe`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
+        body: JSON.stringify(reqBody),
+      });
+
+      const data = await resp.json();
+      jsonRequest.textContent  = JSON.stringify(reqBody, null, 2);
+      jsonResponse.textContent = JSON.stringify(data, null, 2);
+      jsonSection.style.display = 'block';
+
+      if (!resp.ok) {
+        setStatus(data.detail || `Error ${resp.status}`, true);
+        return;
+      }
+      renderResults(data);
+      setStatus('');
+    } catch (e) {
+      setStatus('Request failed: ' + e.message, true);
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  // ── Transcribe (upload) ─────────────────────────────────────────────────────
+  submitUploadBtn.addEventListener('click', async () => {
+    const file = fileUpload.files[0];
+    if (!file) return;
+    const base = apiUrlInput.value.replace(/\/$/, '');
+
+    submitUploadBtn.disabled = true;
+    resultsEl.style.display = 'none';
+    jsonSection.style.display = 'none';
+    setStatus('<span class="spinner"></span>Uploading and transcribing… (this may take a while)');
+
+    const language = document.querySelector('input[name=language]:checked').value;
+    const recordingContext = document.querySelector('input[name=recordingContext]:checked').value;
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('language', language);
+    formData.append('recording_context', recordingContext);
+
+    const reqSummary = { upload: file.name, language, recording_context: recordingContext };
+
+    try {
+      const resp = await fetch(`${base}/upload-transcribe`, {
+        method:  'POST',
+        headers: apiHeaders(),
+        body: formData,
+      });
+
+      const data = await resp.json();
+      jsonRequest.textContent  = JSON.stringify(reqSummary, null, 2);
+      jsonResponse.textContent = JSON.stringify(data, null, 2);
+      jsonSection.style.display = 'block';
+
+      if (!resp.ok) {
+        setStatus(data.detail || `Error ${resp.status}`, true);
+        return;
+      }
+      renderResults(data);
+      setStatus('');
+    } catch (e) {
+      setStatus('Request failed: ' + e.message, true);
+    } finally {
+      submitUploadBtn.disabled = false;
+    }
+  });
+
+  // ── Render results ──────────────────────────────────────────────────────────
+  function renderResults(data) {
+    const speakerIndex = {};
+    Object.keys(data.speakers).sort().forEach((spk, i) => {
+      speakerIndex[spk] = i % SPEAKER_COLORS.length;
+    });
+
+    document.getElementById('nSpeakers').textContent = data.n_speakers;
+    document.getElementById('duration').textContent  = fmtDur(data.total_duration_s);
+    document.getElementById('nSegments').textContent = data.segments.length;
+
+    const chips = document.getElementById('speakerChips');
+    chips.innerHTML = '';
+    for (const [spk, stats] of Object.entries(data.speakers)) {
+      const c = SPEAKER_COLORS[speakerIndex[spk]];
+      const fryPct = stats.fry_pct != null ? `${Math.round(stats.fry_pct * 100)}% fry` : '';
+      const langLabel = stats.dominant_lang
+        ? `${stats.dominant_lang.toUpperCase()}${fryPct ? ` · ${fryPct}` : ''}`
+        : 'unknown';
+      const chip = document.createElement('div');
+      chip.className = 'speaker-chip';
+      chip.style.cssText = `background:${c.bg}; border-color:${c.border}; color:${c.color}`;
+      chip.innerHTML = `<strong>${escHtml(spk)}</strong>${stats.n_segments} seg · ${fmtDur(stats.total_dur_s)} · ${langLabel}`;
+      chips.appendChild(chip);
+    }
+
+    const tbody = document.getElementById('segmentsBody');
+    tbody.innerHTML = '';
+    for (const seg of data.segments) {
+      const c = SPEAKER_COLORS[speakerIndex[seg.speaker]];
+      const langClass = seg.lang ? `lang-${seg.lang}` : 'lang-null';
+      const langLabel = seg.lang ? seg.lang.toUpperCase() : '—';
+      const isInaudible = seg.note === 'overlapping_speech';
+      tbody.insertAdjacentHTML('beforeend', `
+        <tr>
+          <td><button class="seg-play-btn" data-start="${seg.start}" data-end="${seg.end}" title="Play segment">▶</button></td>
+          <td class="time">${fmtTime(seg.start)}–${fmtTime(seg.end)}</td>
+          <td><span class="badge" style="background:${c.bg};color:${c.color};border:1px solid ${c.border}">${escHtml(seg.speaker)}</span></td>
+          <td><span class="badge ${langClass}">${langLabel}</span></td>
+          <td class="text-cell ${isInaudible ? 'inaudible' : ''}">${escHtml(seg.text ?? '')}</td>
+        </tr>`);
+    }
+
+    renderTranscript(data, speakerIndex);
+    resultsEl.style.display = 'block';
+  }
+
+  // ── Transcript view ─────────────────────────────────────────────────────────
+  function renderTranscript(data, speakerIndex) {
+    const container = document.getElementById('transcriptBody');
+    container.innerHTML = '';
+
+    // Group consecutive segments by speaker into turns
+    const turns = [];
+    for (const seg of data.segments) {
+      const last = turns[turns.length - 1];
+      if (last && last.speaker === seg.speaker) { last.segments.push(seg); }
+      else { turns.push({ speaker: seg.speaker, segments: [seg] }); }
+    }
+
+    for (const turn of turns) {
+      const c = SPEAKER_COLORS[speakerIndex[turn.speaker]];
+      const turnEl = document.createElement('div');
+      turnEl.className = 'transcript-turn';
+
+      const speakerEl = document.createElement('span');
+      speakerEl.className = 'turn-speaker';
+      speakerEl.style.color = c.color;
+      speakerEl.textContent = turn.speaker;
+      turnEl.appendChild(speakerEl);
+
+      const textEl = document.createElement('p');
+      textEl.className = 'turn-text';
+
+      for (const seg of turn.segments) {
+        const isInaudible = seg.note === 'overlapping_speech';
+        const span = document.createElement('span');
+        span.className = 'seg-span' + (isInaudible ? ' inaudible' : '');
+        span.dataset.start = seg.start;
+        span.dataset.end   = seg.end;
+        span.style.background = c.bg;
+        span.title = `${fmtTime(seg.start)}–${fmtTime(seg.end)}`;
+        span.textContent = isInaudible ? '[inaudible]' : (seg.text || '');
+        textEl.appendChild(span);
+        textEl.appendChild(document.createTextNode(' '));
+      }
+
+      turnEl.appendChild(textEl);
+      container.appendChild(turnEl);
+    }
+  }
+
+  // ── Segment playback (shared by table buttons and transcript spans) ──────────
+  let activeSegEl = null;
+  let stopSegment = null;
+
+  function playSegmentAudio(start, end, el) {
+    if (!currentBlobUrl) return;
+    if (stopSegment) stopSegment();
+
+    const isBtn = el.classList.contains('seg-play-btn');
+
+    function cleanup() {
+      stopSegment = null;
+      activeSegEl = null;
+      audioPlayer.removeEventListener('timeupdate', onTimeUpdate);
+      if (isBtn) { el.textContent = '▶'; el.classList.remove('playing'); }
+      else { el.classList.remove('active'); }
+    }
+
+    function onTimeUpdate() {
+      if (audioPlayer.currentTime >= end) { cleanup(); audioPlayer.pause(); }
+    }
+
+    stopSegment = () => { cleanup(); audioPlayer.pause(); };
+    activeSegEl = el;
+
+    if (isBtn) { el.textContent = '⏸'; el.classList.add('playing'); }
+    else { el.classList.add('active'); }
+
+    audioPlayer.currentTime = start;
+    audioPlayer.play();
+    audioPlayer.addEventListener('timeupdate', onTimeUpdate);
+  }
+
+  document.getElementById('segmentsBody').addEventListener('click', e => {
+    const btn = e.target.closest('.seg-play-btn');
+    if (!btn || !currentBlobUrl) return;
+    if (btn === activeSegEl) { stopSegment(); return; }
+    playSegmentAudio(parseFloat(btn.dataset.start), parseFloat(btn.dataset.end), btn);
+  });
+
+  document.getElementById('transcriptBody').addEventListener('click', e => {
+    const span = e.target.closest('.seg-span');
+    if (!span || !currentBlobUrl) return;
+    if (span === activeSegEl) { stopSegment(); return; }
+    playSegmentAudio(parseFloat(span.dataset.start), parseFloat(span.dataset.end), span);
+  });
+
+  // Stop segment playback when the main player is paused externally
+  audioPlayer.addEventListener('pause', () => { if (stopSegment && audioPlayer.paused) stopSegment(); });
+
+  // ── Utilities ───────────────────────────────────────────────────────────────
+  function setStatus(html, isError = false) {
+    statusEl.innerHTML = html;
+    statusEl.className = isError ? 'error' : '';
+  }
+
+  function fmtTime(s) {
+    const m = Math.floor(s / 60);
+    const sec = (s % 60).toFixed(1).padStart(4, '0');
+    return m > 0 ? `${m}:${sec}` : `${sec}s`;
+  }
+
+  function fmtDur(s) {
+    if (s >= 60) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+    return `${s.toFixed(1)}s`;
+  }
+
+  function escHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+</script>
+</body>
+</html>

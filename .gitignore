@@ -1,0 +1,13 @@
+.idea/
+__pycache__
+.DS_Store
+.env
+.env_vm
+.claude
+.fame_cookies.json
+venv
+kenlm_models
+recordings
+classifier
+
+hf_cache

@@ -1,0 +1,37 @@
+[project]
+name = "TINA-transcription-api"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "python-dotenv",
+    "torch==2.8.0",
+    "torchaudio==2.8.0",
+    "transformers==4.57.6",
+    "huggingface-hub==0.36.2",
+    "librosa",
+    "soundfile",
+    "pyctcdecode",
+    "kenlm",
+    "pyannote.audio>=3.1.0",
+    "python-multipart"
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "httpx",
+    "jiwer",
+]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Deprecation warnings from audioread (third-party, targets Python 3.13 stdlib removal)
+    "ignore::DeprecationWarning:audioread",
+    # librosa fallback warning when PySoundFile can't open a file (expected in error-path tests)
+    "ignore:PySoundFile failed:UserWarning",
+    # librosa internal future warning about __audioread_load (third-party)
+    "ignore::FutureWarning:librosa",
+]
