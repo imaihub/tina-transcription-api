@@ -158,6 +158,13 @@ export async function renderTranscript(root, id) {
       const name = await promptModal({ title: 'New speaker', label: 'Speaker name', confirmText: 'Assign' });
       if (name) reassignTurn(turn, name);
     }));
+
+    // Offer to merge with the following turn only when it has the same speaker.
+    const next = nextTurnOf(turn);
+    if (next && next.speaker === turn.speaker) {
+      items.push(el('div', { class: 'tb-menu-sep' }));
+      items.push(item('Merge with next turn', () => mergeTurn(turn)));
+    }
     positionMenu(el('div', { class: 'tb-menu' }, items), anchor);
   }
 
@@ -167,6 +174,21 @@ export async function renderTranscript(root, id) {
     for (const s of turn.segments) s.speaker = newSpeaker;   // only this turn's segments
     renderBody();
     await saveSegments('Turn reassigned');
+  }
+
+  function nextTurnOf(turn) {
+    const turns = turnsOf();
+    const i = turns.findIndex(tn => String(tn.segments[0].id) === String(turn.segments[0].id));
+    return (i >= 0 && i + 1 < turns.length) ? turns[i + 1] : null;
+  }
+
+  // Merge a turn with the one after it by dropping the boundary marker between them.
+  async function mergeTurn(turn) {
+    const next = nextTurnOf(turn);
+    if (!next || next.speaker !== turn.speaker) return;
+    next.segments[0].break_before = false;   // ensureTurnBoundaries won't re-add it (same speaker)
+    renderBody();
+    await saveSegments('Turns merged');
   }
 
   async function retranscribe(seg, language) {
@@ -476,6 +498,25 @@ export async function renderTranscript(root, id) {
       saveSegments();
     }
 
+    // Backspace at the very start of a turn-leading segment merges it into the previous
+    // turn (same speaker only) — the inverse of split-on-Enter ("delete the newline").
+    function caretAtSpanStart(span) {
+      const sel = getSelection();
+      return !!(sel && sel.rangeCount && sel.getRangeAt(0).collapsed
+                && span.contains(sel.anchorNode) && sel.anchorOffset === 0);
+    }
+    function canMergeIntoPrev(seg) {
+      const idx = t.segments.findIndex(s => String(s.id) === String(seg.id));
+      const prev = t.segments[idx - 1];
+      return idx > 0 && !!seg.break_before && prev && prev.speaker === seg.speaker;
+    }
+    function mergeIntoPrev(seg) {
+      seg.break_before = false;   // drop the boundary; ensureTurnBoundaries won't re-add it (same speaker)
+      renderBody();
+      focusSegStart(seg.id);
+      saveSegments('Turns merged');
+    }
+
     // Floating language chip shown on hover / active.
     const chip = el('button', { class: 'seg-chip', style: 'display:none' });
     let chipSpan = null, hideTimer = null;
@@ -546,7 +587,12 @@ export async function renderTranscript(root, id) {
             if (target && newText !== (target.text || '')) { target.text = newText; saveSegments(); refreshFind(); }
             hideChipSoon();
           });
-          span.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); splitAt(seg, span); } });
+          span.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); splitAt(seg, span); }
+            else if (e.key === 'Backspace' && caretAtSpanStart(span) && canMergeIntoPrev(seg)) {
+              e.preventDefault(); mergeIntoPrev(seg);
+            }
+          });
           span.addEventListener('contextmenu', (e) => { e.preventDefault(); openSegMenu(seg, e.clientX, e.clientY); });
           span.addEventListener('mouseenter', () => showChip(seg, span));
           span.addEventListener('mouseleave', hideChipSoon);
