@@ -313,6 +313,14 @@ tr:hover .row-actions { opacity: 1; }
 .turn-speaker.editable:hover { background: var(--row-hover); }
 .turn-speaker[contenteditable="true"] { background: #fff; outline: 2px solid var(--accent); cursor: text; }
 
+.speaker-ctl { display: inline-flex; align-items: center; gap: 1px; }
+.speaker-caret {
+  background: none; border: none; cursor: pointer; color: var(--text-muted);
+  font-size: 14px; padding: 2px 7px; border-radius: 4px; line-height: 1;
+}
+.speaker-caret:hover { background: var(--row-hover); color: var(--text); }
+.tb-menu-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+
 .seg-row { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0; }
 .seg-row:hover .lang-badge-btn { opacity: 1; }
 .seg-aside { flex-shrink: 0; padding-top: 1px; }

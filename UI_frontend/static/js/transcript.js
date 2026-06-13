@@ -9,7 +9,7 @@
 //   • A "Show language" toggle adds an always-on subtle per-language tint.
 
 import { api } from './api.js';
-import { el, clear, langLabel, toast } from './util.js';
+import { el, clear, langLabel, toast, promptModal } from './util.js';
 
 const SPEAKER_COLORS = [
   { fg: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
@@ -85,14 +85,26 @@ export async function renderTranscript(root, id) {
     }
   }
 
+  // A turn starts at the first segment or wherever an explicit break_before marker is
+  // set. Boundaries are baked in at load (ensureTurnBoundaries) and only ever added (on
+  // split) — never inferred from the speaker name. So renaming or reassigning a turn to
+  // a name matching its neighbour never auto-merges them.
   function turnsOf() {
     const turns = [];
     for (const s of t.segments) {
-      const last = turns[turns.length - 1];
-      if (last && last.speaker === s.speaker && !s.break_before) last.segments.push(s);
-      else turns.push({ speaker: s.speaker, segments: [s] });
+      if (!turns.length || s.break_before) turns.push({ speaker: s.speaker, segments: [s] });
+      else turns[turns.length - 1].segments.push(s);
     }
     return turns;
+  }
+
+  // Make the diarizer's initial turn boundaries explicit, so grouping no longer depends
+  // on the (mutable) speaker name. Only ever adds markers; never removes them.
+  function ensureTurnBoundaries() {
+    for (let i = 1; i < t.segments.length; i++) {
+      const s = t.segments[i];
+      if (!s.break_before && s.speaker !== t.segments[i - 1].speaker) s.break_before = true;
+    }
   }
 
   function speakerLabel(name) {
@@ -116,6 +128,45 @@ export async function renderTranscript(root, id) {
       await saveSegments('Speaker renamed');
     });
     return span;
+  }
+
+  // Speaker control: an editable name (click to rename the speaker everywhere) plus a
+  // caret that opens a menu to assign THIS turn to a different / new speaker.
+  function speakerControl(turn) {
+    const caret = el('button', {
+      class: 'speaker-caret', title: 'Assign this turn to a speaker',
+      onclick: (e) => { e.stopPropagation(); openSpeakerMenu(turn, caret); },
+    }, '▾');
+    return el('span', { class: 'speaker-ctl' }, [speakerLabel(turn.speaker), caret]);
+  }
+
+  function distinctSpeakers() {
+    const out = [];
+    for (const s of t.segments) if (!out.includes(s.speaker)) out.push(s.speaker);
+    return out;
+  }
+
+  function openSpeakerMenu(turn, anchor) {
+    closeToolbarMenus(); closeSegMenu();
+    const item = (label, onClick, current = false) =>
+      el('div', { class: 'tb-menu-item' + (current ? ' current' : ''), onclick: (e) => { e.stopPropagation(); closeToolbarMenus(); onClick(); } }, label);
+
+    const items = [el('div', { class: 'tb-menu-label' }, 'Assign turn to')];
+    for (const s of distinctSpeakers()) items.push(item(s, () => reassignTurn(turn, s), s === turn.speaker));
+    items.push(el('div', { class: 'tb-menu-sep' }));
+    items.push(item('New speaker…', async () => {
+      const name = await promptModal({ title: 'New speaker', label: 'Speaker name', confirmText: 'Assign' });
+      if (name) reassignTurn(turn, name);
+    }));
+    positionMenu(el('div', { class: 'tb-menu' }, items), anchor);
+  }
+
+  async function reassignTurn(turn, newSpeaker) {
+    newSpeaker = (newSpeaker || '').trim();
+    if (!newSpeaker || newSpeaker === turn.speaker) return;
+    for (const s of turn.segments) s.speaker = newSpeaker;   // only this turn's segments
+    renderBody();
+    await saveSegments('Turn reassigned');
   }
 
   async function retranscribe(seg, language) {
@@ -404,12 +455,10 @@ export async function renderTranscript(root, id) {
 
       if (!after) {
         const next = t.segments[idx + 1];
-        if (next && next.speaker === target.speaker && !next.break_before) { next.break_before = true; focusId = next.id; }
+        if (next && !next.break_before) { next.break_before = true; focusId = next.id; }  // split after target
         else return;
       } else if (!before) {
-        const prev = t.segments[idx - 1];
-        const startsTurn = !(prev && prev.speaker === target.speaker && !target.break_before);
-        if (startsTurn) return;
+        if (idx === 0 || target.break_before) return;   // already starts a turn
         target.break_before = true; focusId = target.id;
       } else {
         const totalChars = full.trim().length || 1;
@@ -474,7 +523,7 @@ export async function renderTranscript(root, id) {
       }, '▶');
 
       const head = el('div', { class: 'turn-head reading-head' }, [
-        play, speakerLabel(turn.speaker),
+        play, speakerControl(turn),
         el('span', { class: 'turn-time' }, `${fmtClock(turn.segments[0].start)}–${fmtClock(last.end)}`),
       ]);
 
@@ -514,6 +563,7 @@ export async function renderTranscript(root, id) {
   }
 
   function renderBody() {
+    ensureTurnBoundaries();
     closeSegMenu();
     clear(bodyWrap);
     renderReading(bodyWrap);
