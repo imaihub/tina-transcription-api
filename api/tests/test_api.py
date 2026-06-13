@@ -34,6 +34,17 @@ def _fake_hybrid(audio, sr=16000, beam_width=10, language="nld+fry"):
     return "fry", "goeie moarn", 0.85
 
 
+def _upload(client, audio_dir, headers=AUTH, **form):
+    """POST a sample.wav upload to /v1/audio/transcriptions."""
+    with open(audio_dir / "sample.wav", "rb") as f:
+        return client.post(
+            "/v1/audio/transcriptions",
+            files={"file": ("sample.wav", f, "audio/wav")},
+            data=form,
+            headers=headers,
+        )
+
+
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 class TestAuth:
@@ -164,3 +175,82 @@ class TestTranscribeEndpoint:
                                headers=AUTH)
         assert resp.status_code == 500
         assert "Transcription failed" in resp.json()["detail"]
+
+
+class TestOpenAITranscriptions:
+    """POST /v1/audio/transcriptions (OpenAI diarized_json format)."""
+
+    def test_diarized_json_shape(self, client, audio_dir):
+        with (
+            patch("app.main.diarize", side_effect=_fake_diarize),
+            patch("app.main.run_hybrid", side_effect=_fake_hybrid),
+        ):
+            resp = _upload(client, audio_dir)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["task"] == "transcribe"
+        assert data["duration"] > 0
+        assert data["text"] == "goeie moarn goeie moarn"
+        assert data["usage"] == {"type": "duration", "seconds": data["duration"]}
+
+        assert len(data["segments"]) == 2
+        seg = data["segments"][0]
+        assert seg["id"] == "0"
+        assert seg["speaker"] == "SPEAKER_00"
+        assert seg["text"] == "goeie moarn"
+        assert seg["type"] == "transcript.text.segment"
+        assert set(seg) == {"id", "start", "end", "text", "speaker", "type"}
+
+        # TINA extras live in a separate block, keyed back to segment ids
+        meta = data["tina"]["segments_meta"][0]
+        assert meta == {"id": "0", "lang": "fry", "note": "ok"}
+        assert data["tina"]["speakers"]["SPEAKER_00"]["dominant_lang"] == "fry"
+
+    def test_overlapping_note_in_tina_block(self, client, audio_dir):
+        with (
+            patch("app.main.diarize", side_effect=_fake_diarize_with_overlap),
+            patch("app.main.run_hybrid", side_effect=_fake_hybrid),
+        ):
+            resp = _upload(client, audio_dir)
+
+        data = resp.json()
+        overlap = next(m for m in data["tina"]["segments_meta"] if m["note"] == "overlapping_speech")
+        assert overlap["lang"] is None
+        seg = next(s for s in data["segments"] if s["id"] == overlap["id"])
+        assert seg["text"] == "inaudible"
+
+    def test_bearer_auth_is_accepted(self, client, audio_dir):
+        with (
+            patch("app.main.diarize", side_effect=_fake_diarize),
+            patch("app.main.run_hybrid", side_effect=_fake_hybrid),
+        ):
+            resp = _upload(client, audio_dir, headers={"Authorization": f"Bearer {_TEST_API_KEY}"})
+        assert resp.status_code == 200
+
+    def test_missing_key_returns_401(self, client, audio_dir):
+        resp = _upload(client, audio_dir, headers={})
+        assert resp.status_code == 401
+
+    def test_unsupported_response_format_returns_400(self, client, audio_dir):
+        with (
+            patch("app.main.diarize", side_effect=_fake_diarize),
+            patch("app.main.run_hybrid", side_effect=_fake_hybrid),
+        ):
+            resp = _upload(client, audio_dir, response_format="text")
+        assert resp.status_code == 400
+
+    def test_language_hint_is_mapped(self, client, audio_dir):
+        captured = {}
+
+        def _capturing_hybrid(audio, sr=16000, beam_width=10, language="nld+fry"):
+            captured["language"] = language
+            return "nld", "goeiemorgen", 0.9
+
+        with (
+            patch("app.main.diarize", side_effect=_fake_diarize),
+            patch("app.main.run_hybrid", side_effect=_capturing_hybrid),
+        ):
+            resp = _upload(client, audio_dir, language="nl")
+        assert resp.status_code == 200
+        assert captured["language"] == "nld"

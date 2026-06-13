@@ -269,12 +269,6 @@
     <label><input type="radio" name="language" value="nld"> Dutch only</label>
   </div>
 
-  <!-- Recording context (hidden — passed as GENERAL by default) -->
-  <div style="display:none">
-    <input type="radio" name="recordingContext" value="GENERAL" checked>
-    <input type="radio" name="recordingContext" value="COUNCIL_MEETING">
-  </div>
-
   <div id="status"></div>
 </div>
 
@@ -282,7 +276,7 @@
 <div id="jsonSection" style="display:none">
   <div class="json-panels">
     <div class="json-panel card">
-      <h2>Request</h2>
+      <h2>Request (equivalent curl)</h2>
       <pre class="json" id="jsonRequest"></pre>
     </div>
     <div class="json-panel card">
@@ -467,6 +461,72 @@
     }
   }
 
+  // ── Transcription via the OpenAI-format endpoint ─────────────────────────────
+  // Both source modes POST a file upload to /v1/audio/transcriptions. The server
+  // returns OpenAI `diarized_json`; normalizeDiarized() folds the `tina` block back
+  // into the flat shape renderResults() expects. The raw OpenAI response is shown
+  // in the Response panel.
+  // Render the actual outgoing request as an equivalent curl command. The real call
+  // is a multipart/form-data POST (file upload), so it can't be shown as a JSON body.
+  function describeRequest(base, filename, language) {
+    const lines = [`curl -X POST ${base}/v1/audio/transcriptions`];
+    if (apiKeyInput.value.trim()) lines.push(`-H "X-API-Key: <API_KEY>"`);
+    lines.push(`-F "file=@${filename}"`);
+    lines.push(`-F "response_format=diarized_json"`);
+    lines.push(`-F "language=${language}"`);
+    return lines.join(' \\\n  ');
+  }
+
+  async function runTranscription(base, file, filename, language) {
+    const formData = new FormData();
+    formData.append('file', file, filename);
+    formData.append('response_format', 'diarized_json');
+    formData.append('language', language);
+
+    jsonRequest.textContent = describeRequest(base, filename, language);
+
+    const resp = await fetch(`${base}/v1/audio/transcriptions`, {
+      method:  'POST',
+      headers: apiHeaders(),
+      body: formData,
+    });
+
+    const data = await resp.json();
+    jsonResponse.textContent = JSON.stringify(data, null, 2);
+    jsonSection.style.display = 'block';
+
+    if (!resp.ok) {
+      setStatus(data.detail || `Error ${resp.status}`, true);
+      return;
+    }
+    renderResults(normalizeDiarized(data));
+    setStatus('');
+  }
+
+  // Fold OpenAI diarized_json + the `tina` block into the flat shape used by the UI.
+  function normalizeDiarized(data) {
+    const metaById = {};
+    for (const m of (data.tina?.segments_meta ?? [])) metaById[m.id] = m;
+    const segments = data.segments.map(s => {
+      const m = metaById[s.id] ?? {};
+      return {
+        speaker: s.speaker,
+        start:   s.start,
+        end:     s.end,
+        text:    s.text,
+        lang:    m.lang ?? null,
+        note:    m.note ?? 'ok',
+      };
+    });
+    const speakers = data.tina?.speakers ?? {};
+    return {
+      segments,
+      speakers,
+      total_duration_s: data.duration ?? 0,
+      n_speakers:       Object.keys(speakers).length,
+    };
+  }
+
   // ── Transcribe (server file) ────────────────────────────────────────────────
   submitBtn.addEventListener('click', async () => {
     const filename = fileSelect.value;
@@ -478,30 +538,16 @@
     jsonSection.style.display = 'none';
     setStatus('<span class="spinner"></span>Transcribing… (this may take a while)');
 
-    const reqBody = {
-      filename,
-      recording_context: document.querySelector('input[name=recordingContext]:checked').value,
-      language: document.querySelector('input[name=language]:checked').value,
-    };
+    const language = document.querySelector('input[name=language]:checked').value;
 
     try {
-      const resp = await fetch(`${base}/transcribe`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', ...apiHeaders() },
-        body: JSON.stringify(reqBody),
-      });
+      // The OpenAI endpoint only accepts uploads, so fetch the server-side file first.
+      const encodedPath = filename.split('/').map(encodeURIComponent).join('/');
+      const fileResp = await fetch(`${base}/audio/${encodedPath}`, { headers: apiHeaders() });
+      if (!fileResp.ok) throw new Error(`Could not fetch ${filename} (HTTP ${fileResp.status})`);
+      const blob = await fileResp.blob();
 
-      const data = await resp.json();
-      jsonRequest.textContent  = JSON.stringify(reqBody, null, 2);
-      jsonResponse.textContent = JSON.stringify(data, null, 2);
-      jsonSection.style.display = 'block';
-
-      if (!resp.ok) {
-        setStatus(data.detail || `Error ${resp.status}`, true);
-        return;
-      }
-      renderResults(data);
-      setStatus('');
+      await runTranscription(base, blob, filename, language);
     } catch (e) {
       setStatus('Request failed: ' + e.message, true);
     } finally {
@@ -521,33 +567,9 @@
     setStatus('<span class="spinner"></span>Uploading and transcribing… (this may take a while)');
 
     const language = document.querySelector('input[name=language]:checked').value;
-    const recordingContext = document.querySelector('input[name=recordingContext]:checked').value;
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('language', language);
-    formData.append('recording_context', recordingContext);
-
-    const reqSummary = { upload: file.name, language, recording_context: recordingContext };
 
     try {
-      const resp = await fetch(`${base}/upload-transcribe`, {
-        method:  'POST',
-        headers: apiHeaders(),
-        body: formData,
-      });
-
-      const data = await resp.json();
-      jsonRequest.textContent  = JSON.stringify(reqSummary, null, 2);
-      jsonResponse.textContent = JSON.stringify(data, null, 2);
-      jsonSection.style.display = 'block';
-
-      if (!resp.ok) {
-        setStatus(data.detail || `Error ${resp.status}`, true);
-        return;
-      }
-      renderResults(data);
-      setStatus('');
+      await runTranscription(base, file, file.name, language);
     } catch (e) {
       setStatus('Request failed: ' + e.message, true);
     } finally {

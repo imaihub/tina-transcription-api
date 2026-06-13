@@ -4,6 +4,11 @@ speaker turn using a Frisian or Dutch MMS beam-search model, using a common Fris
 kenlm model. In dual language mode, the choice between Frisian and Dutch is made with a 
 trained language-ID classifier.
 
+The service is exposed through an OpenAI-compatible transcription route
+(`POST /v1/audio/transcriptions`), so existing OpenAI clients can use it with only a
+`base_url` change, while the Frisian/Dutch language and speaker information is preserved
+in an extra response block. See the [API](#api) section for details.
+
 The project consists of the api (in the folder /api), and a minimal example frontend in /api_frontend
 
 # IMPORTANT! Notes on usage
@@ -63,10 +68,10 @@ All models are loaded at startup. The first startup will download the MMS and py
 ## Setup of Test frontend
 A minimal browser UI for manual testing is included in `api_frontend/`. It connects directly to the API via HTTP and supports two source modes:
 
-- **Server file** — select a file from `AUDIO_BASE_DIR` via a dropdown (uses `POST /transcribe`)
-- **Upload file** — pick a local audio file from your computer and upload it directly (uses `POST /upload-transcribe`; the file is deleted from the server after transcription)
+- **Server file** — select a file from `AUDIO_BASE_DIR` via a dropdown
+- **Upload file** — pick a local audio file from your computer
 
-Both modes show an audio player for playback, per-segment play buttons, a transcript view, and the raw request/response JSON.
+Both modes transcribe via the OpenAI-compatible `POST /v1/audio/transcriptions` endpoint (server-file mode fetches the file from `/audio/{path}` and uploads it). The page shows an audio player for playback, per-segment play buttons, a transcript view, and the raw OpenAI-format request/response JSON.
 
 To run it locally:
 
@@ -143,6 +148,24 @@ All configuration lives in `api/.env`. The file is gitignored — use `api/.env_
 | `BEAM_WIDTH` | No | KenLM beam search width. Higher = better quality, slower decoding. Default: `100`. |
 
 ## API
+The service exposes two families of transcription endpoints:
+
+- **OpenAI-compatible** — `POST /v1/audio/transcriptions`, which mirrors OpenAI's
+  audio transcription API (`response_format=diarized_json`). This is the recommended
+  entry point: existing OpenAI clients/SDKs can point at this service with only a
+  `base_url` change. TINA-specific data (per-segment Frisian/Dutch language + note,
+  and the speaker summary) is returned in a separate top-level `tina` block that
+  spec-compliant OpenAI clients ignore. See [`POST /v1/audio/transcriptions`](#post-v1audiotranscriptions).
+- **Native TINA** — `POST /transcribe` (server-side filename) and
+  `POST /upload-transcribe` (direct upload), which return TINA's own flat response
+  shape. These predate the OpenAI route and are kept for backward compatibility.
+
+Both families run the same diarization + transcription pipeline and require the same
+authentication. The native endpoints authenticate with the `X-API-Key` header; the
+OpenAI-compatible endpoint additionally accepts `Authorization: Bearer <API_KEY>`
+(as the OpenAI SDK sends it). The bundled test frontend in `api_frontend/` drives the
+OpenAI-compatible endpoint for both of its source modes.
+
 To use the api, it is the easiest to look at the api_frontend code, as this uses all the api functionality.
 
 ### `GET /files`
@@ -253,6 +276,88 @@ Both endpoints return the same response format:
 | `400` | Unsupported file type |
 | `500` | Diarization failed or transcription failed |
 
+### `POST /v1/audio/transcriptions`
+OpenAI-compatible transcription endpoint. Mirrors OpenAI's `POST /v1/audio/transcriptions` with `response_format=diarized_json`, so an existing OpenAI client can point at this service. The standard OpenAI segment objects are kept pure; TINA-specific data (per-segment language/note and the speaker summary) is returned in a separate top-level `tina` block, which spec-compliant clients ignore.
+
+Authentication accepts either the `X-API-Key` header (as the other endpoints) or `Authorization: Bearer <API_KEY>` (as the OpenAI SDK sends it).
+
+**Request body (`multipart/form-data`):**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `file` | file | required | Audio file to transcribe (`.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`, `.aac`) |
+| `model` | string | `"tina-mms"` | Accepted for compatibility; ignored (the model is fixed by deployment) |
+| `language` | string | — | ISO/OpenAI language hint, mapped to internal modes: `nl`/`nld`/`dutch` → `nld`, `fy`/`fry`/`frisian` → `fry`, empty or `nld+fry` → dual mode. Unknown values fall back to dual mode |
+| `response_format` | string | `"diarized_json"` | Only `diarized_json` is supported |
+| `prompt`, `temperature` | — | — | Accepted for compatibility; ignored |
+
+**Example request (curl):**
+
+```bash
+curl -X POST http://localhost:8001/v1/audio/transcriptions \
+  -H "Authorization: Bearer <API_KEY>" \
+  -F "file=@interview.wav" \
+  -F "response_format=diarized_json" \
+  -F "language=nl"
+```
+
+**Example request (OpenAI Python SDK):**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8001/v1", api_key="<API_KEY>")
+result = client.audio.transcriptions.create(
+    model="tina-mms",
+    file=open("interview.wav", "rb"),
+    response_format="diarized_json",
+)
+```
+
+**Response body (JSON):**
+
+```json
+{
+  "task": "transcribe",
+  "duration": 42.1,
+  "text": "goeie moarn allegear ...",
+  "segments": [
+    {
+      "id": "0",
+      "start": 0.512,
+      "end": 4.231,
+      "text": "goeie moarn allegear",
+      "speaker": "SPEAKER_00",
+      "type": "transcript.text.segment"
+    }
+  ],
+  "usage": { "type": "duration", "seconds": 42.1 },
+  "tina": {
+    "segments_meta": [
+      { "id": "0", "lang": "fry", "note": "ok" }
+    ],
+    "speakers": {
+      "SPEAKER_00": {
+        "n_segments": 5,
+        "total_dur_s": 18.4,
+        "dominant_lang": "fry",
+        "fry_pct": 0.8
+      }
+    }
+  }
+}
+```
+
+Overlapping-speech segments have segment `text` set to `"inaudible"`, `tina.segments_meta[].lang` of `null`, and `note` of `"overlapping_speech"` (matching the `/transcribe` semantics). Each `tina.segments_meta[]` entry shares its `id` with the corresponding `segments[]` entry.
+
+**Error responses (`/v1/audio/transcriptions`):**
+
+| Status | Cause |
+|--------|-------|
+| `400` | Unsupported file type, or `response_format` other than `diarized_json` |
+| `401` | Invalid or missing API key |
+| `500` | Diarization failed or transcription failed |
+
 
 
 ## Unit tests
@@ -268,7 +373,7 @@ Tests use mocked model loading — no GPU or downloaded weights are required.
 
 | File | What is tested |
 |------|----------------|
-| `tests/test_api.py` | Endpoint behaviour: 404 missing file, 400 path traversal, successful transcription, overlapping speech → `"inaudible"`, speaker summary, error propagation |
+| `tests/test_api.py` | Endpoint behaviour: 404 missing file, 400 path traversal, successful transcription, overlapping speech → `"inaudible"`, speaker summary, error propagation; OpenAI `/v1/audio/transcriptions` diarized_json shape, bearer auth, language mapping, response_format validation |
 | `tests/test_diarize.py` | `_is_overlapping`: non-overlapping, overlapping, contained, single-segment, touching boundaries |
 | `tests/test_hybrid.py` | `classify_from_embeddings`: fry wins above threshold, nld wins below, exact threshold → fry |
 | `tests/test_utils.py` | `load_audio`: dtype/shape, resampling, missing file |

@@ -1,6 +1,13 @@
 """
 Transcription API
 
+POST /v1/audio/transcriptions
+  OpenAI-compatible transcription endpoint (response_format=diarized_json).
+  Input:  multipart/form-data with an audio file upload and optional settings
+  Output: OpenAI diarized_json; TINA-specific per-segment language/note and the
+          speaker summary are returned in a separate top-level `tina` block.
+          (uploaded file is deleted from the tmp folder after transcription)
+
 POST /transcribe
   Input:  JSON with a filename (relative to AUDIO_BASE_DIR) and optional settings
   Output: JSON with per-segment transcriptions and speaker summary
@@ -44,10 +51,20 @@ from .models import load_model
 _AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+# OpenAI SDK clients authenticate with `Authorization: Bearer <key>`; accept that too.
+_bearer_header = APIKeyHeader(name="Authorization", auto_error=False)
 
 
-async def require_api_key(key: str | None = Security(_api_key_header)):
-    if API_KEY and key != API_KEY:
+async def require_api_key(
+    key: str | None = Security(_api_key_header),
+    authorization: str | None = Security(_bearer_header),
+):
+    if not API_KEY:
+        return
+    provided = key
+    if authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:].strip()
+    if provided != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
@@ -174,6 +191,72 @@ class TranscribeResponse(BaseModel):
     n_speakers:       int
 
 
+# ── OpenAI-compatible schemas (POST /v1/audio/transcriptions) ────────────────────
+# Mirrors OpenAI's `diarized_json` response. The standard segment objects are kept
+# pure; TINA-specific data (per-segment language/note + speaker summary) lives in a
+# separate top-level `tina` block, which spec-compliant OpenAI clients ignore.
+
+class OpenAISegment(BaseModel):
+    id:      str
+    start:   float
+    end:     float
+    text:    str
+    speaker: str
+    type:    str = "transcript.text.segment"
+
+
+class OpenAIUsage(BaseModel):
+    type:    str = "duration"
+    seconds: float
+
+
+class TinaSegmentMeta(BaseModel):
+    id:   str           # matches OpenAISegment.id
+    lang: str | None
+    note: str
+
+
+class TinaBlock(BaseModel):
+    segments_meta: list[TinaSegmentMeta]
+    speakers:      dict[str, SpeakerSummary]
+
+
+class TranscriptionDiarized(BaseModel):
+    task:     str = "transcribe"
+    duration: float
+    text:     str
+    segments: list[OpenAISegment]
+    usage:    OpenAIUsage
+    tina:     TinaBlock
+
+
+_RESPONSE_FORMATS = {"diarized_json"}
+
+# Map OpenAI/ISO language hints to this service's internal language modes.
+_LANGUAGE_MAP = {
+    "":            "nld+fry",
+    "nl":          "nld",
+    "nld":         "nld",
+    "dutch":       "nld",
+    "nederlands":  "nld",
+    "fy":          "fry",
+    "fry":         "fry",
+    "frisian":     "fry",
+    "frysk":       "fry",
+    "nld+fry":     "nld+fry",
+    "fy+nl":       "nld+fry",
+    "nl+fy":       "nld+fry",
+}
+
+
+def _map_language(language: str | None) -> str:
+    """Translate an OpenAI/ISO `language` hint to a `nld`/`fry`/`nld+fry` mode.
+
+    Unknown or absent values fall back to dual-language mode.
+    """
+    return _LANGUAGE_MAP.get((language or "").strip().lower(), "nld+fry")
+
+
 # ── Endpoint ───────────────────────────────────────────────────────────────────
 
 @app.post("/transcribe", response_model=TranscribeResponse, dependencies=[Depends(require_api_key)])
@@ -211,10 +294,60 @@ async def upload_transcribe(
         tmp_path.unlink(missing_ok=True)
 
 
+# ── OpenAI-compatible endpoint ───────────────────────────────────────────────────
+
+@app.post(
+    "/v1/audio/transcriptions",
+    response_model=TranscriptionDiarized,
+    dependencies=[Depends(require_api_key)],
+)
+async def openai_transcriptions(
+    file: UploadFile = File(...),
+    model: str = Form("tina-mms"),                 # accepted for compatibility; ignored
+    language: str | None = Form(None),             # ISO hint, mapped to nld/fry/nld+fry
+    response_format: str = Form("diarized_json"),
+    prompt: str | None = Form(None),               # accepted for compatibility; ignored
+    temperature: float | None = Form(None),        # accepted for compatibility; ignored
+):
+    """OpenAI-compatible transcription endpoint.
+
+    Mirrors `POST /v1/audio/transcriptions` with `response_format=diarized_json`.
+    TINA-specific data (per-segment language/note, speaker summary) is returned in
+    a separate top-level `tina` block.
+    """
+    if response_format not in _RESPONSE_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported response_format: {response_format!r}. Supported: diarized_json",
+        )
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in _AUDIO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix or '(none)'}")
+
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        segments, speakers, total_duration = await _process(tmp_path, _map_language(language))
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    return _to_diarized(segments, speakers, total_duration)
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-async def _transcribe_path(audio_path: Path, language: str) -> TranscribeResponse:
-    """Run diarization + per-segment transcription on a resolved audio file path."""
+async def _process(
+    audio_path: Path, language: str,
+) -> tuple[list[SegmentResult], dict[str, SpeakerSummary], float]:
+    """Run diarization + per-segment transcription on a resolved audio file path.
+
+    Returns the per-segment results, the per-speaker summary, and the total
+    duration — the common core shared by every response shape.
+    """
     try:
         turns, audio = await _run_in_thread(diarize, audio_path, MIN_SEGMENT_DUR)
     except Exception as e:
@@ -283,13 +416,48 @@ async def _transcribe_path(audio_path: Path, language: str) -> TranscribeRespons
             fry_pct=round(fry_pct, 3) if fry_pct is not None else None,
         )
 
-    total_duration = max((seg.end for seg in segments), default=0.0)
+    total_duration = round(max((seg.end for seg in segments), default=0.0), 2)
 
+    return segments, speaker_summary, total_duration
+
+
+async def _transcribe_path(audio_path: Path, language: str) -> TranscribeResponse:
+    """Run the pipeline and return the native TINA response shape."""
+    segments, speaker_summary, total_duration = await _process(audio_path, language)
     return TranscribeResponse(
         segments=segments,
         speakers=speaker_summary,
-        total_duration_s=round(total_duration, 2),
+        total_duration_s=total_duration,
         n_speakers=len(speaker_summary),
+    )
+
+
+def _to_diarized(
+    segments: list[SegmentResult],
+    speakers: dict[str, SpeakerSummary],
+    total_duration: float,
+) -> TranscriptionDiarized:
+    """Build an OpenAI `diarized_json` response, with TINA extras in `tina`."""
+    oai_segments: list[OpenAISegment] = []
+    metas:        list[TinaSegmentMeta] = []
+    texts:        list[str] = []
+
+    for i, seg in enumerate(segments):
+        sid = str(i)
+        text = seg.text or ""
+        oai_segments.append(OpenAISegment(
+            id=sid, start=seg.start, end=seg.end, text=text, speaker=seg.speaker,
+        ))
+        metas.append(TinaSegmentMeta(id=sid, lang=seg.lang, note=seg.note))
+        if text:
+            texts.append(text)
+
+    return TranscriptionDiarized(
+        duration=total_duration,
+        text=" ".join(texts),
+        segments=oai_segments,
+        usage=OpenAIUsage(seconds=total_duration),
+        tina=TinaBlock(segments_meta=metas, speakers=speakers),
     )
 
 
