@@ -94,6 +94,31 @@ UI_frontend/
       transcript.js  transcription detail + editing
 ```
 
+## Transcript editing model (item 4)
+Two view modes over the **same segment list** (segments stay the source of truth):
+- **Detail view** — per-segment rows: play, language badge, "Re-transcribe as" dropdown.
+- **Reading view** — consecutive same-speaker segments merged into one flowing,
+  editable paragraph per turn; for correcting text and splitting.
+
+Decisions:
+- **Edits preserve segments.** In the reading view each segment is a distinct
+  editable run within the paragraph; an edit updates only that segment's `text`, so
+  per-segment language + timestamps (and retranscribe) survive editing.
+- **Turn grouping** = consecutive segments with the same speaker *and* no explicit
+  break. A `break_before` flag on a segment forces a new turn even for the same
+  speaker — needed so a split into two same-named blocks doesn't re-merge.
+- **Split-on-Enter timing**: if the cursor is at/near a real segment boundary, snap to
+  that true timestamp; only when splitting *inside* a segment, interpolate by character
+  offset: `mid = start + (end−start) × charsBefore/charsTotal`. We have no word-level
+  timestamps, so interpolation is approximate — but fine segments mean we fall back to
+  it rarely. A split divides the cursor's segment, marks the second half `break_before`,
+  and moves any later segments of the turn into the new block.
+- **Search & replace** operates on the segment text model directly, so it is
+  view-independent.
+
+Build sub-steps: (4a) view-mode toggle + reading view with per-segment editing;
+(4b) split-on-Enter; (4c) find & replace.
+
 ## Build order (from DESCRIPTION.md TODO)
 1. ✅ Decide structure (this document)
 2. Sidebar + folders detail view, with New Transcript button

@@ -45,9 +45,12 @@ Example screenshots are in the folder /screenshots. Screenshot file names contai
 * editing (search/replace, split) is item 4; copy/export is item 5
 * example screenshots: 2, 3, 4, 5
 
-4. Exit of transcription result
-* search and replace
-* split on enter
+4. transcript editing (see ARCHITECTURE.md "Transcript editing model")
+* ✅ 4a: Detail / Reading view toggle; reading view = flowing editable paragraph per
+  turn, edits preserve per-segment language/timestamps
+* ✅ 4b: split-on-Enter (snap to real boundary, else interpolate; break_before flag;
+  caret lands in the new block; same-speaker halves stay separate)
+* ⬜ 4c: find & replace
 * example screenshots 5, 6, 6a, 7
 
 5. options after transcription edit

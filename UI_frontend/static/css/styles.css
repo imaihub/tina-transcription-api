@@ -205,6 +205,26 @@ tr:hover .row-actions { opacity: 1; }
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--accent-dark); border-bottom-color: var(--accent); }
 
+/* Transcript toolbar + view-mode toggle */
+.tx-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.view-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.view-btn {
+  background: #fff; border: none; padding: 7px 16px; font-size: 13px; font-weight: 600;
+  color: var(--text-muted); cursor: pointer;
+}
+.view-btn + .view-btn { border-left: 1px solid var(--border); }
+.view-btn:hover { background: var(--row-hover); }
+.view-btn.active { background: var(--accent); color: #fff; }
+
+/* Reading view */
+.reading-turn { padding: 10px 0 12px 14px; margin-bottom: 6px; }
+.reading-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.reading-text { line-height: 1.85; font-size: 15px; }
+.seg-edit { border-radius: 3px; padding: 0 1px; outline: none; }
+.seg-edit:hover { background: #faf7ff; }
+.seg-edit:focus { background: #fff; box-shadow: inset 0 0 0 2px var(--accent-soft); }
+.seg-edit.inaudible { color: #aaa; font-style: italic; }
+
 /* Transcript body */
 .transcript-body { padding-bottom: 90px; }
 .turn { padding: 6px 0 6px 14px; margin-bottom: 10px; }
