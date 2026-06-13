@@ -35,9 +35,14 @@ Example screenshots are in the folder /screenshots. Screenshot file names contai
 * backend scaffold: FastAPI + SQLite (db.py) + REST API + server-to-server proxy to the transcription API
 * run: `cd UI_frontend && uv sync && cp .env_template .env && uv run uvicorn main:app --port 8090`
 
-3. implement file upload + transcript
-* file upload functionality + settings
-* transcription button + functionality
+3. ✅ implement file upload + transcript
+* upload (select + drag & drop), shows selected file with duration
+* settings: name, save-to-folder (active), language (Dutch / Frisian / Dutch+Frisian)
+* Transcribe Now → POST /api/transcriptions (progress spinner) → opens the result
+* transcript detail view: Transcript + Content(placeholder) tabs, speaker blocks with
+  per-segment playback + language badges, sticky audio player
+* deferred (needs API support): exact number of speakers (see ../TODO.md), custom spelling
+* editing (search/replace, split) is item 4; copy/export is item 5
 * example screenshots: 2, 3, 4, 5
 
 4. Exit of transcription result
