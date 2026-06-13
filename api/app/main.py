@@ -17,6 +17,11 @@ POST /upload-transcribe
   Output: JSON with per-segment transcriptions and speaker summary
           (uploaded file is deleted from the tmp folder after transcription)
 
+POST /v1/audio/transcribe-segment
+  Re-transcribe a single time range in a forced language (no diarization).
+  Input:  multipart/form-data with an audio file, start, end, and language (fry|nld)
+  Output: JSON with the segment's text and language
+
 All models are loaded at startup; requests are handled synchronously.
 """
 
@@ -47,6 +52,7 @@ from .hybrid import run_hybrid
 from .kenlm import decoder_ready, rebuild_decoder
 from .lang_id import load_lang_id
 from .models import load_model
+from .utils import load_audio
 
 _AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
 
@@ -336,6 +342,68 @@ async def openai_transcriptions(
         tmp_path.unlink(missing_ok=True)
 
     return _to_diarized(segments, speakers, total_duration)
+
+
+# ── Single-segment re-transcription (no diarization) ─────────────────────────────
+
+class SegmentTranscription(BaseModel):
+    text:  str
+    lang:  str
+    start: float
+    end:   float
+
+
+@app.post("/v1/audio/transcribe-segment", response_model=SegmentTranscription, dependencies=[Depends(require_api_key)])
+async def transcribe_segment(
+    file: UploadFile = File(...),
+    start: float = Form(...),
+    end: float = Form(...),
+    language: str = Form(...),
+):
+    """Transcribe a single time range of an audio file in a forced language.
+
+    Unlike the full endpoints, this runs no diarization — it slices [start, end]
+    (with the usual padding) and forces `language`, so a single mis-classified
+    segment can be re-transcribed cheaply without re-segmenting the audio.
+    """
+    if language not in ("fry", "nld"):
+        raise HTTPException(status_code=400, detail="language must be 'fry' or 'nld'")
+    if end <= start:
+        raise HTTPException(status_code=400, detail="end must be greater than start")
+
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in _AUDIO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix or '(none)'}")
+
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+
+    try:
+        audio = await _run_in_thread(_load_audio_only, tmp_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not read audio: {e}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    SR = 16_000
+    s = max(0,          int((start - PAD_S) * SR))
+    e = min(len(audio), int((end   + PAD_S) * SR))
+    if e <= s:
+        raise HTTPException(status_code=400, detail="Segment range is outside the audio")
+
+    try:
+        lang, text, _ = await _run_in_thread(run_hybrid, audio[s:e], SR, BEAM_WIDTH, language)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}")
+
+    return SegmentTranscription(text=text or "", lang=lang or language, start=start, end=end)
+
+
+def _load_audio_only(path: Path):
+    audio, _ = load_audio(path, target_sr=16_000)
+    return audio
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

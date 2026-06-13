@@ -254,3 +254,44 @@ class TestOpenAITranscriptions:
             resp = _upload(client, audio_dir, language="nl")
         assert resp.status_code == 200
         assert captured["language"] == "nld"
+
+
+class TestTranscribeSegment:
+    """POST /v1/audio/transcribe-segment (forced single language, no diarization)."""
+
+    def _post(self, client, audio_dir, **form):
+        with open(audio_dir / "sample.wav", "rb") as f:
+            return client.post(
+                "/v1/audio/transcribe-segment",
+                files={"file": ("sample.wav", f, "audio/wav")},
+                data=form, headers=AUTH,
+            )
+
+    def test_forces_language_and_skips_diarization(self, client, audio_dir):
+        captured = {}
+
+        def _capturing_hybrid(audio, sr=16000, beam_width=10, language="nld+fry"):
+            captured["language"] = language
+            captured["n_samples"] = len(audio)
+            return language, "tekst", 0.0
+
+        # diarize must NOT be called by this endpoint
+        with (
+            patch("app.main.diarize", side_effect=AssertionError("diarize should not run")),
+            patch("app.main.run_hybrid", side_effect=_capturing_hybrid),
+        ):
+            resp = self._post(client, audio_dir, start=0.5, end=1.5, language="fry")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data == {"text": "tekst", "lang": "fry", "start": 0.5, "end": 1.5}
+        assert captured["language"] == "fry"
+        assert captured["n_samples"] > 0  # a non-empty slice was passed
+
+    def test_rejects_non_single_language(self, client, audio_dir):
+        resp = self._post(client, audio_dir, start=0.0, end=1.0, language="nld+fry")
+        assert resp.status_code == 400
+
+    def test_rejects_bad_range(self, client, audio_dir):
+        resp = self._post(client, audio_dir, start=2.0, end=1.0, language="nld")
+        assert resp.status_code == 400

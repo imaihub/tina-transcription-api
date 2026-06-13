@@ -36,6 +36,8 @@ export const api = {
   getTranscription:   (id)     => fetch(`/api/transcriptions/${id}`).then(json),
   updateTranscription:(id, b)  => fetch(`/api/transcriptions/${id}`, jsonReq('PATCH', b)).then(json),
   deleteTranscription:(id)     => fetch(`/api/transcriptions/${id}`, { method: 'DELETE' }).then(json),
+  retranscribeSegment:(id, segId, language) =>
+    fetch(`/api/transcriptions/${id}/segments/${segId}/retranscribe`, jsonReq('POST', { language })).then(json),
 
   // Upload + transcribe (multipart). `form` is a FormData.
   createTranscription: (form)  => fetch('/api/transcriptions', { method: 'POST', body: form }).then(json),

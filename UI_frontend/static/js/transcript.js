@@ -3,7 +3,7 @@
 // added in TODO item 4; copy/export in item 5.
 
 import { api } from './api.js';
-import { el, clear, langLabel } from './util.js';
+import { el, clear, langLabel, toast } from './util.js';
 
 const SPEAKER_COLORS = [
   { fg: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
@@ -61,13 +61,91 @@ function renderTranscriptPane(pane, t) {
     return;
   }
 
-  // Stable speaker → colour mapping.
-  const speakers = [...new Set(segments.map(s => s.speaker))].sort();
-  const colorOf = (spk) => SPEAKER_COLORS[speakers.indexOf(spk) % SPEAKER_COLORS.length];
+  // Speaker → colour by first-appearance order, so colours stay stable across renames.
+  const order = [];
+  for (const s of segments) if (!order.includes(s.speaker)) order.push(s.speaker);
+  const colorOf = (spk) => SPEAKER_COLORS[Math.max(0, order.indexOf(spk)) % SPEAKER_COLORS.length];
+
+  // Click a speaker label to rename it; Enter saves and renames every segment with
+  // that speaker, Escape cancels.
+  function speakerLabel(name, color) {
+    const span = el('span', { class: 'turn-speaker editable', style: `color:${color}`, title: 'Click to rename', contenteditable: 'false' }, name);
+    span.addEventListener('click', () => {
+      if (span.getAttribute('contenteditable') === 'true') return;
+      span.setAttribute('contenteditable', 'true');
+      span.focus();
+      getSelection().selectAllChildren(span);
+    });
+    span.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); span.blur(); }
+      else if (e.key === 'Escape') { e.preventDefault(); span.textContent = name; span.blur(); }
+    });
+    span.addEventListener('blur', () => {
+      span.setAttribute('contenteditable', 'false');
+      const newName = span.textContent.trim();
+      if (!newName || newName === name) { span.textContent = name; return; }
+      renameSpeaker(name, newName);
+    });
+    return span;
+  }
+
+  async function renameSpeaker(oldName, newName) {
+    for (const s of t.segments) if (s.speaker === oldName) s.speaker = newName;
+    renderTranscriptPane(pane, t);   // optimistic: update all turns immediately
+    try {
+      await api.updateTranscription(t.id, { segments: t.segments });
+      toast('Speaker renamed');
+    } catch (e) {
+      toast(`Save failed: ${e.message}`);
+    }
+  }
 
   const audio = el('audio', { controls: '', src: api.audioUrl(t.id), style: 'width:100%' });
 
-  // Group consecutive segments by speaker into turns.
+  // Re-transcribe a single segment in a forced language (no re-diarization).
+  async function retranscribe(seg, language, ddEl) {
+    ddEl.replaceChildren(el('span', { class: 'seg-spinner' }));
+    try {
+      const updated = await api.retranscribeSegment(t.id, seg.id, language);
+      const target = t.segments.find(s => String(s.id) === String(seg.id));
+      target.text = updated.text;
+      target.lang = updated.lang;
+      target.note = 'ok';
+      toast(`Re-transcribed as ${langLabel(language)}`);
+    } catch (e) {
+      toast(`Re-transcribe failed: ${e.message}`);
+    }
+    renderTranscriptPane(pane, t);
+  }
+
+  // Language badge with a "Re-transcribe as" dropdown.
+  function langDropdown(seg, c) {
+    const badge = el('button', {
+      class: 'lang-badge-btn', title: 'Change language',
+      style: `background:${c.bg};color:${c.fg};border:1px solid ${c.border}`,
+    }, [el('span', {}, langLabel(seg.lang) || '—'), el('span', { class: 'caret' }, '▾')]);
+
+    const menu = el('div', { class: 'lang-menu', style: 'display:none' }, [
+      el('div', { class: 'lang-menu-label' }, 'Re-transcribe as'),
+      ...[['nld', 'Dutch'], ['fry', 'Frisian']].map(([code, label]) =>
+        el('div', {
+          class: 'lang-menu-item' + (seg.lang === code ? ' current' : ''),
+          onclick: (e) => { e.stopPropagation(); closeMenus(); retranscribe(seg, code, dd); },
+        }, label)),
+    ]);
+
+    badge.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = menu.style.display !== 'none';
+      closeMenus();
+      menu.style.display = isOpen ? 'none' : 'block';
+    });
+
+    const dd = el('div', { class: 'lang-dd' }, [badge, menu]);
+    return dd;
+  }
+
+  // Group consecutive segments by speaker into turns (one speaker header per turn).
   const turns = [];
   for (const s of segments) {
     const last = turns[turns.length - 1];
@@ -78,36 +156,34 @@ function renderTranscriptPane(pane, t) {
   const body = el('div', { class: 'transcript-body' });
   for (const turn of turns) {
     const c = colorOf(turn.speaker);
-    const seg0 = turn.segments[0];
-    const langs = [...new Set(turn.segments.map(s => s.lang).filter(Boolean))];
+    const turnEl = el('div', { class: 'turn', style: `border-left:3px solid ${c.border}` });
+    turnEl.appendChild(el('div', { class: 'turn-head' }, speakerLabel(turn.speaker, c.fg)));
 
-    const playBtn = el('button', { class: 'seg-play', title: 'Play', onclick: () => playRange(audio, playBtn, seg0.start, turn.segments[turn.segments.length - 1].end) }, '▶');
+    for (const seg of turn.segments) {
+      const inaudible = seg.note === 'overlapping_speech';
+      const play = el('button', { class: 'seg-play', title: 'Play', onclick: () => playRange(audio, play, seg.start, seg.end) }, '▶');
+      const text = el('div', { class: 'seg-text-cell' + (inaudible ? ' inaudible' : ''), title: `${fmtClock(seg.start)}–${fmtClock(seg.end)}` },
+        inaudible ? '[inaudible]' : (seg.text || ''));
+      const meta = el('div', { class: 'seg-meta' }, inaudible ? [] : langDropdown(seg, c));
 
-    const head = el('div', { class: 'turn-head' }, [
-      el('span', { class: 'turn-speaker', style: `color:${c.fg}` }, turn.speaker),
-      ...langs.map(l => el('span', { class: 'lang-badge', style: `background:${c.bg};color:${c.fg};border:1px solid ${c.border}` }, langLabel(l))),
-      el('span', { class: 'turn-time' }, `${fmtClock(seg0.start)}`),
-    ]);
-
-    const textEl = el('div', { class: 'turn-text', style: `border-left:3px solid ${c.border}` });
-    for (const s of turn.segments) {
-      const inaudible = s.note === 'overlapping_speech';
-      textEl.appendChild(el('span', {
-        class: 'seg-text' + (inaudible ? ' inaudible' : ''),
-        title: `${fmtClock(s.start)}–${fmtClock(s.end)}`,
-      }, inaudible ? '[inaudible]' : (s.text || '')));
-      textEl.appendChild(document.createTextNode(' '));
+      turnEl.appendChild(el('div', { class: 'seg-row' }, [
+        el('div', { class: 'seg-aside' }, play),
+        text,
+        meta,
+      ]));
     }
-
-    body.appendChild(el('div', { class: 'turn' }, [
-      el('div', { class: 'turn-aside' }, playBtn),
-      el('div', { class: 'turn-main' }, [head, textEl]),
-    ]));
+    body.appendChild(turnEl);
   }
 
   pane.appendChild(body);
   pane.appendChild(el('div', { class: 'player-bar' }, audio));
 }
+
+// Close any open language dropdown when clicking elsewhere.
+function closeMenus() {
+  document.querySelectorAll('.lang-menu').forEach(m => { m.style.display = 'none'; });
+}
+document.addEventListener('click', closeMenus);
 
 // ── Per-segment playback ───────────────────────────────────────────────────
 
@@ -115,8 +191,9 @@ let activeBtn = null;
 let stopActive = null;
 
 function playRange(audio, btn, start, end) {
+  const wasActive = btn === activeBtn;
   if (stopActive) stopActive();
-  if (btn === activeBtn) return; // toggled off above
+  if (wasActive) return; // re-click on the playing segment → stop (toggle off)
 
   const onTime = () => { if (audio.currentTime >= end) stop(); };
   function stop() {
