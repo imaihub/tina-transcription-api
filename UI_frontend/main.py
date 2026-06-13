@@ -218,17 +218,16 @@ def api_get_audio(transcription_id: int):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-async def _call_transcription_api(content: bytes, filename: str, language: str) -> dict:
-    """POST the audio to the transcription API and return its diarized_json body."""
+async def _post_to_api(path: str, content: bytes, filename: str, data: dict) -> dict:
+    """POST audio + form fields to the transcription API at `path`; return its JSON.
+
+    Raises HTTP 502 if the API is unreachable or returns an error.
+    """
     headers = {"X-API-Key": TRANSCRIPTION_API_KEY} if TRANSCRIPTION_API_KEY else {}
     files = {"file": (filename, content)}
-    data = {"response_format": "diarized_json", "language": language}
     try:
         async with httpx.AsyncClient(timeout=None) as client:
-            resp = await client.post(
-                f"{TRANSCRIPTION_API_URL}/v1/audio/transcriptions",
-                headers=headers, files=files, data=data,
-            )
+            resp = await client.post(f"{TRANSCRIPTION_API_URL}{path}", headers=headers, files=files, data=data)
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Could not reach transcription API: {e}")
     if resp.status_code != 200:
@@ -239,29 +238,22 @@ async def _call_transcription_api(content: bytes, filename: str, language: str) 
             pass
         raise HTTPException(status_code=502, detail=f"Transcription API error: {detail}")
     return resp.json()
+
+
+async def _call_transcription_api(content: bytes, filename: str, language: str) -> dict:
+    """Full diarized transcription of an uploaded file."""
+    return await _post_to_api(
+        "/v1/audio/transcriptions", content, filename,
+        {"response_format": "diarized_json", "language": language},
+    )
 
 
 async def _call_transcribe_segment(content: bytes, filename: str, start: float, end: float, language: str) -> dict:
     """Forced-language transcription of one time range (no diarization)."""
-    headers = {"X-API-Key": TRANSCRIPTION_API_KEY} if TRANSCRIPTION_API_KEY else {}
-    files = {"file": (filename, content)}
-    data = {"start": str(start), "end": str(end), "language": language}
-    try:
-        async with httpx.AsyncClient(timeout=None) as client:
-            resp = await client.post(
-                f"{TRANSCRIPTION_API_URL}/v1/audio/transcribe-segment",
-                headers=headers, files=files, data=data,
-            )
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach transcription API: {e}")
-    if resp.status_code != 200:
-        detail = resp.text
-        try:
-            detail = resp.json().get("detail", detail)
-        except Exception:
-            pass
-        raise HTTPException(status_code=502, detail=f"Transcription API error: {detail}")
-    return resp.json()
+    return await _post_to_api(
+        "/v1/audio/transcribe-segment", content, filename,
+        {"start": str(start), "end": str(end), "language": language},
+    )
 
 
 def _merge_segments(raw: dict) -> list[dict]:

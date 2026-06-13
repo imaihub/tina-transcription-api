@@ -142,7 +142,7 @@ export async function renderTranscript(root, id) {
     const segSpans = turn.segments
       .map(s => ({ seg: s, span: bodyWrap.querySelector(`.seg-edit[data-seg-id="${CSS.escape(String(s.id))}"]`) }))
       .filter(x => x.span);
-    playRanges(audio, btn, [[seg.start, end]], {
+    playRange(audio, btn, seg.start, end, {
       onTick: (ct) => highlightPlaying(segSpans, ct),
       onStop: () => highlightPlaying(segSpans, -1),
     });
@@ -232,7 +232,7 @@ export async function renderTranscript(root, id) {
     if (HL_OK) {
       matches.forEach((m, idx) => {
         const node = spanById(m.segId)?.firstChild;
-        if (!node || node.nodeType !== 3) return;
+        if (!node || node.nodeType !== Node.TEXT_NODE) return;
         const r = new Range();
         try { r.setStart(node, m.start); r.setEnd(node, m.end); } catch { return; }
         (idx === current ? hlCur : hlAll).add(r);
@@ -443,7 +443,10 @@ export async function renderTranscript(root, id) {
       chipSpan = span;
       const lc = langColor(seg.lang);
       chip.textContent = `${lc.short} ▾`;
-      chip.style.cssText += `;background:${lc.bg};color:${lc.fg};border-color:${lc.border};display:inline-flex`;
+      chip.style.background = lc.bg;
+      chip.style.color = lc.fg;
+      chip.style.borderColor = lc.border;
+      chip.style.display = 'inline-flex';
       positionChip(span);
       chip.onclick = (e) => { e.stopPropagation(); const r = chip.getBoundingClientRect(); openSegMenu(seg, r.left, r.bottom + 2); };
     }
@@ -464,7 +467,7 @@ export async function renderTranscript(root, id) {
       const segSpans = [];
       const play = el('button', {
         class: 'seg-play', title: 'Play turn', 'data-turn-id': turn.segments[0].id,
-        onclick: () => playRanges(audio, play, [[turn.segments[0].start, last.end]], {
+        onclick: () => playRange(audio, play, turn.segments[0].start, last.end, {
           onTick: (ct) => highlightPlaying(segSpans, ct),
           onStop: () => highlightPlaying(segSpans, -1),
         }),
@@ -525,23 +528,18 @@ export async function renderTranscript(root, id) {
 let activeBtn = null;
 let stopActive = null;
 
-// Play a list of [start, end] ranges. A single range plays continuously (no seeks);
-// multiple ranges play back-to-back, skipping gaps between them. A rAF loop watches
-// currentTime to stop at the end and to drive optional onTick/onStop callbacks.
-function playRanges(audio, btn, ranges, opts = {}) {
+// Play [start, end] continuously, preserving the real pauses in the recording. A rAF
+// loop watches currentTime to stop at the end and to drive optional onTick/onStop.
+// Re-invoking with the same button toggles playback off.
+function playRange(audio, btn, start, end, opts = {}) {
   const wasActive = btn && btn === activeBtn;
   if (stopActive) stopActive();
-  if (wasActive || !ranges.length) return;
+  if (wasActive) return;
 
-  let i = 0, raf = 0;
+  let raf = 0;
   function tick() {
-    const ct = audio.currentTime;
-    if (ct >= ranges[i][1]) {
-      i++;
-      if (i >= ranges.length) { stop(); return; }
-      if (audio.currentTime < ranges[i][0]) audio.currentTime = ranges[i][0]; // skip the gap
-    }
-    if (opts.onTick) opts.onTick(ct);
+    if (audio.currentTime >= end) { stop(); return; }
+    if (opts.onTick) opts.onTick(audio.currentTime);
     raf = requestAnimationFrame(tick);
   }
   function stop() {
@@ -553,9 +551,15 @@ function playRanges(audio, btn, ranges, opts = {}) {
   }
   activeBtn = btn || null; stopActive = stop;
   if (btn) btn.textContent = '⏸';
-  audio.currentTime = ranges[0][0];
+  audio.currentTime = start;
   audio.play();
   raf = requestAnimationFrame(tick);
+}
+
+// Stop any active playback. Called by the router when leaving the transcript view so
+// the rAF loop and audio don't keep running after the view is torn down.
+export function stopPlayback() {
+  if (stopActive) stopActive();
 }
 
 // Highlight the segment span whose range contains the current playback time
