@@ -50,7 +50,8 @@ Example screenshots are in the folder /screenshots. Screenshot file names contai
   turn, edits preserve per-segment language/timestamps
 * ✅ 4b: split-on-Enter (snap to real boundary, else interpolate; break_before flag;
   caret lands in the new block; same-speaker halves stay separate)
-* ⬜ 4c: find & replace
+* ✅ 4c: find & replace (highlights all matches via CSS Custom Highlight API,
+  match counter + prev/next, replace current / replace all, persisted)
 * example screenshots 5, 6, 6a, 7
 
 5. options after transcription edit

@@ -219,6 +219,27 @@ tr:hover .row-actions { opacity: 1; }
   background: linear-gradient(135deg, #bfdbfe 0 50%, #a7f3d0 50% 100%);
 }
 
+/* Find & replace bar */
+.find-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.find-icon { font-size: 13px; opacity: .6; }
+.find-bar input {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+  font-size: 13px; background: #fff;
+}
+.find-bar input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.find-input, .replace-input { width: 150px; }
+.find-count { font-size: 12px; color: var(--text-muted); min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+.find-nav {
+  background: #fff; border: 1px solid var(--border); border-radius: 6px;
+  width: 26px; height: 30px; cursor: pointer; color: var(--text-muted); font-size: 15px; line-height: 1;
+}
+.find-nav:hover { background: var(--row-hover); }
+.find-sep { width: 1px; height: 22px; background: var(--border); margin: 0 2px; }
+.seg-edit.find-current { outline: 2px solid #f59e0b; border-radius: 3px; }
+
+::highlight(tina-find) { background-color: #fde68a; }
+::highlight(tina-find-current) { background-color: #f59e0b; color: #1f2937; }
+
 /* Reading view */
 .tx-body { position: relative; }
 .reading-turn { padding: 10px 0 12px 14px; margin-bottom: 6px; }

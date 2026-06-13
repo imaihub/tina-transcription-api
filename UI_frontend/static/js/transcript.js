@@ -171,7 +171,9 @@ export async function renderTranscript(root, id) {
     if (r.bottom > innerHeight) menu.style.top = `${Math.max(8, y - r.height)}px`;
   }
 
-  // ── Toolbar ──────────────────────────────────────────────────────────────────
+  // ── Toolbar: find/replace + language toggle ──────────────────────────────────
+  const bodyWrap = el('div', { class: 'tx-body' + (showLang ? ' show-lang' : '') });
+
   const langToggle = el('button', {
     class: 'toolbar-btn' + (showLang ? ' active' : ''), title: "Highlight each segment's transcribed language",
     onclick: () => {
@@ -182,8 +184,118 @@ export async function renderTranscript(root, id) {
     },
   }, [el('span', { class: 'lang-swatch' }), 'Show language']);
 
-  const toolbar = el('div', { class: 'tx-toolbar' }, [el('span', { style: 'margin-left:auto' }), langToggle]);
-  const bodyWrap = el('div', { class: 'tx-body' + (showLang ? ' show-lang' : '') });
+  // Find & replace. Matches are computed over segment text; highlighting uses the CSS
+  // Custom Highlight API so it doesn't mutate the contenteditable DOM.
+  const findInput = el('input', { class: 'find-input', type: 'text', placeholder: 'Find' });
+  const replaceInput = el('input', { class: 'replace-input', type: 'text', placeholder: 'Replace with' });
+  const countEl = el('span', { class: 'find-count' }, '');
+  const prevBtn = el('button', { class: 'find-nav', title: 'Previous (Shift+Enter)' }, '‹');
+  const nextBtn = el('button', { class: 'find-nav', title: 'Next (Enter)' }, '›');
+  const replaceBtn = el('button', { class: 'toolbar-btn', title: 'Replace current match' }, 'Replace');
+  const replaceAllBtn = el('button', { class: 'toolbar-btn', title: 'Replace all matches' }, 'All');
+  const findBar = el('div', { class: 'find-bar' }, [
+    el('span', { class: 'find-icon' }, '🔍'), findInput, countEl, prevBtn, nextBtn,
+    el('span', { class: 'find-sep' }), replaceInput, replaceBtn, replaceAllBtn,
+  ]);
+
+  let matches = [], current = -1;
+  const HL_OK = typeof Highlight !== 'undefined' && CSS.highlights;
+  const hlAll = HL_OK ? new Highlight() : null;
+  const hlCur = HL_OK ? new Highlight() : null;
+  if (HL_OK) { CSS.highlights.set('tina-find', hlAll); CSS.highlights.set('tina-find-current', hlCur); }
+
+  function commitEdits() {
+    bodyWrap.querySelectorAll('.seg-edit:not(.inaudible)').forEach(span => {
+      const seg = t.segments.find(s => String(s.id) === span.dataset.segId);
+      if (seg) { const txt = span.textContent.trim(); if (txt !== (seg.text || '')) seg.text = txt; }
+    });
+  }
+  function clearHighlights() {
+    if (HL_OK) { hlAll.clear(); hlCur.clear(); }
+    bodyWrap.querySelectorAll('.seg-edit.find-current').forEach(s => s.classList.remove('find-current'));
+  }
+  function computeMatches() {
+    matches = [];
+    const q = findInput.value;
+    if (!q) return;
+    const ql = q.toLowerCase();
+    bodyWrap.querySelectorAll('.seg-edit:not(.inaudible)').forEach(span => {
+      const tl = span.textContent.toLowerCase();
+      let i = tl.indexOf(ql);
+      while (i !== -1) { matches.push({ segId: span.dataset.segId, start: i, end: i + q.length }); i = tl.indexOf(ql, i + q.length); }
+    });
+  }
+  function spanById(id) { return bodyWrap.querySelector(`.seg-edit[data-seg-id="${CSS.escape(id)}"]`); }
+  function renderHighlights() {
+    clearHighlights();
+    if (!matches.length) return;
+    if (HL_OK) {
+      matches.forEach((m, idx) => {
+        const node = spanById(m.segId)?.firstChild;
+        if (!node || node.nodeType !== 3) return;
+        const r = new Range();
+        try { r.setStart(node, m.start); r.setEnd(node, m.end); } catch { return; }
+        (idx === current ? hlCur : hlAll).add(r);
+      });
+    } else if (matches[current]) {
+      spanById(matches[current].segId)?.classList.add('find-current');
+    }
+  }
+  function updateCount() {
+    countEl.textContent = matches.length ? `${current + 1}/${matches.length}` : (findInput.value ? '0/0' : '');
+  }
+  function scrollToCurrent() {
+    if (matches[current]) spanById(matches[current].segId)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  function updateFind(keepCurrent) {
+    commitEdits();
+    computeMatches();
+    if (!matches.length) current = -1;
+    else if (!keepCurrent || current < 0 || current >= matches.length) current = 0;
+    renderHighlights(); updateCount();
+  }
+  function refreshFind() { if (findInput.value) updateFind(true); else clearHighlights(); }
+  function gotoMatch(delta) {
+    if (!matches.length) return;
+    current = (current + delta + matches.length) % matches.length;
+    renderHighlights(); updateCount(); scrollToCurrent();
+  }
+  function replaceAllCI(text, q, repl) {
+    const ql = q.toLowerCase(), tl = text.toLowerCase();
+    let out = '', i = 0, idx;
+    while ((idx = tl.indexOf(ql, i)) !== -1) { out += text.slice(i, idx) + repl; i = idx + q.length; }
+    return out + text.slice(i);
+  }
+  async function doReplace(all) {
+    commitEdits();
+    const q = findInput.value;
+    if (!q || !matches.length) return;
+    const repl = replaceInput.value;
+    if (all) {
+      for (const seg of t.segments) {
+        if (seg.note === 'overlapping_speech' || !seg.text) continue;
+        seg.text = replaceAllCI(seg.text, q, repl);
+      }
+    } else {
+      const m = matches[current];
+      const seg = m && t.segments.find(s => String(s.id) === m.segId);
+      if (seg) seg.text = seg.text.slice(0, m.start) + repl + seg.text.slice(m.end);
+    }
+    await saveSegments();
+    renderBody();          // rebuilds spans + refreshFind()
+    scrollToCurrent();
+  }
+  findInput.addEventListener('input', () => { updateFind(false); scrollToCurrent(); });
+  findInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); gotoMatch(e.shiftKey ? -1 : 1); }
+    else if (e.key === 'Escape') { e.preventDefault(); findInput.value = ''; updateFind(false); }
+  });
+  prevBtn.addEventListener('click', () => gotoMatch(-1));
+  nextBtn.addEventListener('click', () => gotoMatch(1));
+  replaceBtn.addEventListener('click', () => doReplace(false));
+  replaceAllBtn.addEventListener('click', () => doReplace(true));
+
+  const toolbar = el('div', { class: 'tx-toolbar' }, [findBar, el('span', { style: 'margin-left:auto' }), langToggle]);
   transcriptPane.append(toolbar, bodyWrap);
 
   // ── Reading view ─────────────────────────────────────────────────────────────
@@ -305,7 +417,7 @@ export async function renderTranscript(root, id) {
             if (splitting) return;
             const newText = span.textContent.trim();
             const target = t.segments.find(s => String(s.id) === String(seg.id));
-            if (target && newText !== (target.text || '')) { target.text = newText; saveSegments(); }
+            if (target && newText !== (target.text || '')) { target.text = newText; saveSegments(); refreshFind(); }
             hideChipSoon();
           });
           span.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); splitAt(seg, span); } });
@@ -328,6 +440,7 @@ export async function renderTranscript(root, id) {
     closeSegMenu();
     clear(bodyWrap);
     renderReading(bodyWrap);
+    refreshFind();   // re-highlight matches against the rebuilt spans
   }
 
   renderBody();
