@@ -85,7 +85,10 @@ async function appendChildren(tbody, f, afterRow = null) {
           el('span', {}, t.name),
         ])),
         el('td', {}, fmtDate(t.created_at)),
-        el('td', { class: 'right' }, fmtDur(t.duration_s)),
+        el('td', { class: 'right' }, [
+          el('span', { class: 'child-dur' }, fmtDur(t.duration_s)),
+          el('button', { class: 'btn-ghost btn-danger child-del', title: 'Delete', onclick: (e) => { e.stopPropagation(); onDeleteTranscription(t); } }, '🗑'),
+        ]),
       ]));
     }
   }
@@ -97,6 +100,16 @@ async function appendChildren(tbody, f, afterRow = null) {
 
 function removeChildren(tbody, folderId) {
   tbody.querySelectorAll(`tr.child-row[data-parent="${folderId}"]`).forEach(r => r.remove());
+}
+
+async function onDeleteTranscription(t) {
+  if (!await confirmModal({ title: `Delete "${t.name}"? This cannot be undone.` })) return;
+  try {
+    await api.deleteTranscription(t.id);
+    toast('Transcription deleted');
+    refreshSidebar();
+    renderFolders(document.getElementById('detail'));
+  } catch (e) { toast(e.message); }
 }
 
 async function onNewFolder() {

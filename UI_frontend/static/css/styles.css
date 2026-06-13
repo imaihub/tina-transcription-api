@@ -99,6 +99,7 @@ body {
 
 .page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
 .page-head h2 { font-size: 26px; font-weight: 700; }
+.title-row { display: flex; align-items: center; gap: 10px; }
 
 .breadcrumb { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; }
 .breadcrumb a { color: var(--accent-dark); cursor: pointer; }
@@ -214,6 +215,7 @@ tr:hover .row-actions { opacity: 1; }
 .btn-group .toolbar-btn:first-child { border-radius: 8px 0 0 8px; }
 .btn-group .toolbar-btn:last-child { border-radius: 0 8px 8px 0; border-left: none; }
 .caret-btn { padding: 7px 8px; }
+.undo-redo { font-size: 26px; font-weight: 700; line-height: 1; padding: 1px 11px; }
 .toolbar-btn .caret { font-size: 9px; opacity: .7; margin-left: 5px; }
 
 .tb-menu {
@@ -225,6 +227,12 @@ tr:hover .row-actions { opacity: 1; }
 .tb-check { width: 16px; height: 16px; border: 1.5px solid var(--border); border-radius: 5px; flex-shrink: 0; display: grid; place-items: center; }
 .tb-menu-item.on .tb-check { background: var(--accent); border-color: var(--accent); }
 .tb-menu-item.on .tb-check::after { content: '✓'; color: #fff; font-size: 11px; line-height: 1; }
+.tb-menu-item.danger { color: var(--danger); }
+
+/* Per-transcription delete in the folders overview (hover) */
+.child-dur { font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.child-del { opacity: 0; margin-left: 10px; }
+tr:hover .child-del { opacity: 1; }
 .toolbar-btn {
   background: #fff; border: 1px solid var(--border); border-radius: 8px;
   padding: 7px 12px; font-size: 13px; font-weight: 600; color: var(--text-muted);

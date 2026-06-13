@@ -25,19 +25,27 @@ See `ARCHITECTURE.md` for the full design and `DESCRIPTION.md` for the spec/road
 - **Reading-view editor** (the transcription detail page):
   - Flowing, editable text grouped per speaker turn; edits autosave. Each segment stays
     a distinct editable run, so per-segment language and timestamps are preserved.
-  - **Rename a speaker** by clicking its label — renames it across all its segments.
-  - **Split a turn** by pressing Enter mid-text — snaps to a real segment boundary when
-    the caret is at a segment edge, otherwise interpolates the split time by character
-    position. Both halves keep the speaker (rename one to re-attribute).
+  - **Speaker control** (▾ next to the name): click the name to **rename** the speaker
+    everywhere; the menu **reassigns just this turn** to another (or new) speaker, and
+    offers **Merge with next turn** when the next turn shares the speaker.
+  - **Split a turn** with Enter mid-text — snaps to a real segment boundary at a segment
+    edge, otherwise interpolates the split time by character position. **Merge** by
+    pressing Backspace at the start of a turn (same speaker), or via the speaker menu.
+    Turn boundaries are explicit, so renaming/reassigning never auto-merges turns.
   - **Playback** — play a single segment, "play from here" to the end of the turn, or
     play a whole turn; the currently-playing segment is highlighted. Playback is
-    continuous (the real pauses in the recording are preserved).
+    continuous (the real pauses in the recording are preserved). **Spacebar** toggles
+    play/pause; clicking a segment while idle moves the playhead there.
   - **Re-transcribe a segment** as Dutch or Frisian via right-click (or the language
     chip shown on hover/active) — fixes mis-detected language without re-diarizing.
   - **Find & replace** — highlights all matches, navigate with a counter, replace one or
     all.
+  - **Undo / redo** — Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z over edits (rename, reassign,
+    split, merge, replace, re-transcribe, text edits).
   - **Show language** toggle — an always-on subtle per-language tint (blue = Dutch,
     green = Frisian).
+- **Manage a transcription** (⋮ next to the title): rename, move to another folder, or
+  delete. Transcriptions can also be deleted from the folders overview.
 - **Copy** the transcript to the clipboard (with speaker-name / timestamp toggles) and
   **Export** to `.txt` or `.json`.
 - A **Content** tab exists as a placeholder ("coming soon").

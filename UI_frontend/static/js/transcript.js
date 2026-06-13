@@ -9,7 +9,8 @@
 //   • A "Show language" toggle adds an always-on subtle per-language tint.
 
 import { api } from './api.js';
-import { el, clear, langLabel, toast, promptModal } from './util.js';
+import { refreshSidebar } from './sidebar.js';
+import { el, clear, langLabel, toast, promptModal, confirmModal } from './util.js';
 
 const SPEAKER_COLORS = [
   { fg: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
@@ -43,7 +44,41 @@ export async function renderTranscript(root, id) {
     el('a', { onclick: () => { location.hash = '#/folders'; } }, 'Folders'),
     document.createTextNode(` / ${t.folder_name} / ${t.name}`),
   ]));
-  root.appendChild(el('div', { class: 'page-head' }, el('h2', {}, t.name)));
+  const titleMenuBtn = el('button', { class: 'toolbar-btn caret-btn', title: 'Transcription options', onclick: (e) => { e.stopPropagation(); openTitleMenu(titleMenuBtn); } }, '⋮');
+  root.appendChild(el('div', { class: 'page-head' }, el('div', { class: 'title-row' }, [el('h2', {}, t.name), titleMenuBtn])));
+
+  // ── Transcription management (rename / move / delete) ────────────────────────
+  async function renameTranscription() {
+    const name = await promptModal({ title: 'Rename transcription', label: 'Name', value: t.name, confirmText: 'Rename' });
+    if (!name || name === t.name) return;
+    try { await api.updateTranscription(t.id, { name }); refreshSidebar(); renderTranscript(root, t.id); }
+    catch (e) { toast(e.message); }
+  }
+  async function moveTranscription(folderId) {
+    if (folderId === t.folder_id) return;
+    try { await api.updateTranscription(t.id, { folder_id: folderId }); refreshSidebar(); renderTranscript(root, t.id); }
+    catch (e) { toast(e.message); }
+  }
+  async function deleteTranscription() {
+    if (!await confirmModal({ title: `Delete "${t.name}"? This cannot be undone.` })) return;
+    try { await api.deleteTranscription(t.id); toast('Transcription deleted'); refreshSidebar(); location.hash = '#/folders'; }
+    catch (e) { toast(e.message); }
+  }
+  async function openTitleMenu(anchor) {
+    closeToolbarMenus();
+    let folders = [];
+    try { folders = await api.listFolders(); } catch {}
+    const item = (label, fn, opts = {}) =>
+      el('div', { class: 'tb-menu-item' + (opts.current ? ' current' : '') + (opts.danger ? ' danger' : ''), onclick: (e) => { e.stopPropagation(); closeToolbarMenus(); fn(); } }, label);
+    const items = [item('Rename…', renameTranscription)];
+    if (folders.length > 1) {
+      items.push(el('div', { class: 'tb-menu-label' }, 'Move to folder'));
+      for (const f of folders) items.push(item(f.name, () => moveTranscription(f.id), { current: f.id === t.folder_id }));
+    }
+    items.push(el('div', { class: 'tb-menu-sep' }));
+    items.push(item('Delete transcription', deleteTranscription, { danger: true }));
+    positionMenu(el('div', { class: 'tb-menu' }, items), anchor);
+  }
 
   // ── Tabs ───────────────────────────────────────────────────────────────────
   const transcriptPane = el('div', { class: 'tab-pane' });
@@ -85,6 +120,32 @@ export async function renderTranscript(root, id) {
     }
   }
 
+  // Undo/redo over segment-state snapshots. pushUndo() is called just before each
+  // mutating action; undo/redo swap whole-segment snapshots and persist.
+  const undoStack = [], redoStack = [];
+  const snapshot = () => structuredClone(t.segments);
+  function pushUndo() {
+    undoStack.push(snapshot());
+    if (undoStack.length > 60) undoStack.shift();
+    redoStack.length = 0;
+  }
+  async function undo() {
+    document.activeElement?.blur?.();   // commit any in-progress edit (its blur records an undo step)
+    if (!undoStack.length) { toast('Nothing to undo'); return; }
+    redoStack.push(snapshot());
+    t.segments = undoStack.pop();
+    renderBody();
+    await saveSegments();
+  }
+  async function redo() {
+    document.activeElement?.blur?.();
+    if (!redoStack.length) { toast('Nothing to redo'); return; }
+    undoStack.push(snapshot());
+    t.segments = redoStack.pop();
+    renderBody();
+    await saveSegments();
+  }
+
   // A turn starts at the first segment or wherever an explicit break_before marker is
   // set. Boundaries are baked in at load (ensureTurnBoundaries) and only ever added (on
   // split) — never inferred from the speaker name. So renaming or reassigning a turn to
@@ -123,6 +184,7 @@ export async function renderTranscript(root, id) {
       span.setAttribute('contenteditable', 'false');
       const newName = span.textContent.trim();
       if (!newName || newName === name) { span.textContent = name; return; }
+      pushUndo();
       for (const s of t.segments) if (s.speaker === name) s.speaker = newName;
       renderBody();
       await saveSegments('Speaker renamed');
@@ -171,6 +233,7 @@ export async function renderTranscript(root, id) {
   async function reassignTurn(turn, newSpeaker) {
     newSpeaker = (newSpeaker || '').trim();
     if (!newSpeaker || newSpeaker === turn.speaker) return;
+    pushUndo();
     for (const s of turn.segments) s.speaker = newSpeaker;   // only this turn's segments
     renderBody();
     await saveSegments('Turn reassigned');
@@ -186,6 +249,7 @@ export async function renderTranscript(root, id) {
   async function mergeTurn(turn) {
     const next = nextTurnOf(turn);
     if (!next || next.speaker !== turn.speaker) return;
+    pushUndo();
     next.segments[0].break_before = false;   // ensureTurnBoundaries won't re-add it (same speaker)
     renderBody();
     await saveSegments('Turns merged');
@@ -197,6 +261,7 @@ export async function renderTranscript(root, id) {
     try {
       const updated = await api.retranscribeSegment(t.id, seg.id, language);
       const target = t.segments.find(s => String(s.id) === String(seg.id));
+      pushUndo();
       target.text = updated.text; target.lang = updated.lang; target.note = 'ok';
       toast(`Re-transcribed as ${langLabel(language)}`);
     } catch (e) {
@@ -344,6 +409,7 @@ export async function renderTranscript(root, id) {
     const q = findInput.value;
     if (!q || !matches.length) return;
     const repl = replaceInput.value;
+    pushUndo();
     if (all) {
       for (const seg of t.segments) {
         if (seg.note === 'overlapping_speech' || !seg.text) continue;
@@ -442,7 +508,11 @@ export async function renderTranscript(root, id) {
     ]), exportBtn);
   }
 
-  const toolbar = el('div', { class: 'tx-toolbar' }, [findBar, el('span', { style: 'margin-left:auto' }), copyGroup, exportBtn, langToggle]);
+  const undoBtn = el('button', { class: 'toolbar-btn caret-btn undo-redo', title: 'Undo (Cmd/Ctrl+Z)', onclick: undo }, '↺');
+  const redoBtn = el('button', { class: 'toolbar-btn caret-btn undo-redo', title: 'Redo (Shift+Cmd/Ctrl+Z)', onclick: redo }, '↻');
+  const undoGroup = el('div', { class: 'btn-group' }, [undoBtn, redoBtn]);
+
+  const toolbar = el('div', { class: 'tx-toolbar' }, [findBar, el('span', { style: 'margin-left:auto' }), undoGroup, copyGroup, exportBtn, langToggle]);
   transcriptPane.append(toolbar, bodyWrap);
 
   // ── Reading view ─────────────────────────────────────────────────────────────
@@ -477,15 +547,16 @@ export async function renderTranscript(root, id) {
 
       if (!after) {
         const next = t.segments[idx + 1];
-        if (next && !next.break_before) { next.break_before = true; focusId = next.id; }  // split after target
+        if (next && !next.break_before) { pushUndo(); next.break_before = true; focusId = next.id; }  // split after target
         else return;
       } else if (!before) {
         if (idx === 0 || target.break_before) return;   // already starts a turn
-        target.break_before = true; focusId = target.id;
+        pushUndo(); target.break_before = true; focusId = target.id;
       } else {
         const totalChars = full.trim().length || 1;
         let mid = target.start + (target.end - target.start) * (before.length / totalChars);
         mid = Math.min(target.end, Math.max(target.start, Math.round(mid * 1000) / 1000));
+        pushUndo();
         const newSeg = { id: newSegId(), speaker: target.speaker, start: mid, end: target.end, text: after, lang: target.lang, note: target.note || 'ok', break_before: true };
         target.end = mid; target.text = before;
         t.segments.splice(idx + 1, 0, newSeg);
@@ -511,6 +582,7 @@ export async function renderTranscript(root, id) {
       return idx > 0 && !!seg.break_before && prev && prev.speaker === seg.speaker;
     }
     function mergeIntoPrev(seg) {
+      pushUndo();
       seg.break_before = false;   // drop the boundary; ensureTurnBoundaries won't re-add it (same speaker)
       renderBody();
       focusSegStart(seg.id);
@@ -584,7 +656,7 @@ export async function renderTranscript(root, id) {
             if (splitting) return;
             const newText = span.textContent.trim();
             const target = t.segments.find(s => String(s.id) === String(seg.id));
-            if (target && newText !== (target.text || '')) { target.text = newText; saveSegments(); refreshFind(); }
+            if (target && newText !== (target.text || '')) { pushUndo(); target.text = newText; saveSegments(); refreshFind(); }
             hideChipSoon();
           });
           span.addEventListener('keydown', (e) => {
@@ -597,6 +669,8 @@ export async function renderTranscript(root, id) {
           span.addEventListener('mouseenter', () => showChip(seg, span));
           span.addEventListener('mouseleave', hideChipSoon);
           span.addEventListener('focus', () => showChip(seg, span));
+          // Click while idle moves the audio playhead to this segment (then press play).
+          span.addEventListener('click', () => { if (!stopActive && audio.paused) audio.currentTime = seg.start; });
         }
         para.appendChild(span);
         para.appendChild(document.createTextNode(' '));
@@ -616,6 +690,8 @@ export async function renderTranscript(root, id) {
     refreshFind();   // re-highlight matches against the rebuilt spans
   }
 
+  // Expose undo/redo for the module-level keyboard listener.
+  viewControls = { undo, redo };
   renderBody();
 }
 
@@ -691,3 +767,18 @@ function fmtClock(s) {
   const m = Math.floor(s / 60), sec = Math.floor(s % 60);
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
+
+// ── Keyboard shortcuts (transcript view only) ───────────────────────────────
+// Set by the active renderTranscript; the listener no-ops on other views.
+let viewControls = null;
+document.addEventListener('keydown', (e) => {
+  if (!location.hash.startsWith('#/t/') || !viewControls) return;
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+    const ae = document.activeElement;
+    // Keep the browser's native undo in the find/replace text fields; everywhere else
+    // (including the contenteditable segments) use our segment-level undo.
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
+    e.preventDefault();
+    if (e.shiftKey) viewControls.redo(); else viewControls.undo();
+  }
+});
