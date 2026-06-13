@@ -13,7 +13,7 @@ transcription. Within the context of this project, adapter files, kenlm models a
 language identifier model were trained. 
 
 Those files are not included in this repository. If you would like to experiment with these 
-models, please contact us at mark.westra@nhlstenden.com, and we can discuss opportunities for 
+models, please contact us at mark.westra (at) nhlstenden (dot) com, and we can discuss opportunities for 
 collaboration. 
 
 In a later stage in the project, we plan to open source the trained models as well.
