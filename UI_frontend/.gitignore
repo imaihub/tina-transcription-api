@@ -1,0 +1,5 @@
+# Runtime data: SQLite DB and stored audio uploads
+data/
+
+# Local virtualenv
+.venv/
