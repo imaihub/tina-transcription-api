@@ -54,9 +54,12 @@ Example screenshots are in the folder /screenshots. Screenshot file names contai
   match counter + prev/next, replace current / replace all, persisted)
 * example screenshots 5, 6, 6a, 7
 
-5. options after transcription edit
-* implement copy to clipboard
-* implement 
+5. ✅ options after transcription edit (copy + export)
+* Copy: split button → clipboard, with "Include speaker names" / "Include timestamps"
+  toggles (persisted)
+* Export: simple dropdown → Plain text (.txt) and JSON (.json) downloads
+* deferred (not in scope now): Translate, undo/redo, speaker add/merge, subtitles
+  (srt/vtt), EAF (ELAN), Word (.docx), audio download
 * example screenshots: 7, 8, 9, 10, 11, 12, 13
 
 6. Implement content hub

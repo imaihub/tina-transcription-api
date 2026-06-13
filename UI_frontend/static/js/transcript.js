@@ -295,7 +295,81 @@ export async function renderTranscript(root, id) {
   replaceBtn.addEventListener('click', () => doReplace(false));
   replaceAllBtn.addEventListener('click', () => doReplace(true));
 
-  const toolbar = el('div', { class: 'tx-toolbar' }, [findBar, el('span', { style: 'margin-left:auto' }), langToggle]);
+  // ── Copy & export ────────────────────────────────────────────────────────────
+  const COPY_SPK_KEY = 'tina.copy.speakers', COPY_TS_KEY = 'tina.copy.timestamps';
+  const copyOpts = {
+    speakers: localStorage.getItem(COPY_SPK_KEY) !== '0',   // default on
+    timestamps: localStorage.getItem(COPY_TS_KEY) === '1',  // default off
+  };
+
+  function buildTranscriptText({ speakers, timestamps }) {
+    const out = [];
+    for (const turn of turnsOf()) {
+      const head = [];
+      if (speakers) head.push(turn.speaker);
+      if (timestamps) head.push(`[${fmtClock(turn.segments[0].start)} – ${fmtClock(turn.segments[turn.segments.length - 1].end)}]`);
+      if (head.length) out.push(head.join('  '));
+      out.push(turn.segments.map(s => s.note === 'overlapping_speech' ? '[inaudible]' : (s.text || '')).join(' ').replace(/\s+/g, ' ').trim());
+      out.push('');
+    }
+    return out.join('\n').trim() + '\n';
+  }
+  function safeName(ext) { return `${(t.name || 'transcript').replace(/[^\w.-]+/g, '_')}.${ext}`; }
+  function download(filename, content, mime) {
+    const url = URL.createObjectURL(new Blob([content], { type: mime }));
+    const a = el('a', { href: url, download: filename });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function copyTranscript() {
+    commitEdits();
+    const text = buildTranscriptText(copyOpts);
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Transcript copied to clipboard');
+    } catch {
+      const ta = el('textarea', { style: 'position:fixed;opacity:0' }); ta.value = text;
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); toast('Transcript copied to clipboard'); }
+      catch { toast('Could not copy'); }
+      ta.remove();
+    }
+  }
+
+  const copyBtn = el('button', { class: 'toolbar-btn', title: 'Copy transcript to clipboard', onclick: copyTranscript }, 'Copy');
+  const copyOptsBtn = el('button', { class: 'toolbar-btn caret-btn', title: 'Copy options', onclick: (e) => { e.stopPropagation(); openCopyOpts(); } }, '▾');
+  const copyGroup = el('div', { class: 'btn-group' }, [copyBtn, copyOptsBtn]);
+
+  function openCopyOpts() {
+    closeToolbarMenus();
+    const toggleRow = (label, key, storeKey) => {
+      const row = el('div', { class: 'tb-menu-item toggle', onclick: (e) => {
+        e.stopPropagation();
+        copyOpts[key] = !copyOpts[key];
+        localStorage.setItem(storeKey, copyOpts[key] ? '1' : '0');
+        row.classList.toggle('on', copyOpts[key]);
+      } }, [el('span', { class: 'tb-check' }), label]);
+      row.classList.toggle('on', copyOpts[key]);
+      return row;
+    };
+    positionMenu(el('div', { class: 'tb-menu' }, [
+      toggleRow('Include speaker names', 'speakers', COPY_SPK_KEY),
+      toggleRow('Include timestamps', 'timestamps', COPY_TS_KEY),
+    ]), copyOptsBtn);
+  }
+
+  const exportBtn = el('button', { class: 'toolbar-btn', title: 'Export transcript', onclick: (e) => { e.stopPropagation(); openExport(); } }, ['Export', el('span', { class: 'caret' }, '▾')]);
+
+  function openExport() {
+    closeToolbarMenus();
+    const item = (label, fn) => el('div', { class: 'tb-menu-item', onclick: (e) => { e.stopPropagation(); closeToolbarMenus(); fn(); } }, label);
+    positionMenu(el('div', { class: 'tb-menu' }, [
+      item('Plain text (.txt)', () => { commitEdits(); download(safeName('txt'), buildTranscriptText({ speakers: true, timestamps: true }), 'text/plain'); }),
+      item('JSON (.json)', () => { commitEdits(); download(safeName('json'), JSON.stringify(t, null, 2), 'application/json'); }),
+    ]), exportBtn);
+  }
+
+  const toolbar = el('div', { class: 'tx-toolbar' }, [findBar, el('span', { style: 'margin-left:auto' }), copyGroup, exportBtn, langToggle]);
   transcriptPane.append(toolbar, bodyWrap);
 
   // ── Reading view ─────────────────────────────────────────────────────────────
@@ -499,6 +573,19 @@ function closeSegMenu() {
 }
 document.addEventListener('click', closeSegMenu);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSegMenu(); });
+
+// Toolbar dropdown menus (copy options, export).
+function closeToolbarMenus() {
+  document.querySelectorAll('.tb-menu').forEach(m => m.remove());
+}
+function positionMenu(menu, anchor) {
+  document.body.appendChild(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${r.bottom + 4}px`;
+}
+document.addEventListener('click', closeToolbarMenus);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeToolbarMenus(); });
 
 function fmtClock(s) {
   const m = Math.floor(s / 60), sec = Math.floor(s % 60);
