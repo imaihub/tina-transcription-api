@@ -132,6 +132,22 @@ export async function renderTranscript(root, id) {
     renderBody();
   }
 
+  // Play a segment — optionally through to the end of its turn — driving that turn's
+  // play button so it shows ⏸ and can be paused no matter how playback was started.
+  function playTurnRange(seg, toEndOfTurn) {
+    const turn = turnsOf().find(tn => tn.segments.some(s => String(s.id) === String(seg.id)));
+    if (!turn) return;
+    const end = toEndOfTurn ? turn.segments[turn.segments.length - 1].end : seg.end;
+    const btn = bodyWrap.querySelector(`.seg-play[data-turn-id="${CSS.escape(String(turn.segments[0].id))}"]`);
+    const segSpans = turn.segments
+      .map(s => ({ seg: s, span: bodyWrap.querySelector(`.seg-edit[data-seg-id="${CSS.escape(String(s.id))}"]`) }))
+      .filter(x => x.span);
+    playRanges(audio, btn, [[seg.start, end]], {
+      onTick: (ct) => highlightPlaying(segSpans, ct),
+      onStop: () => highlightPlaying(segSpans, -1),
+    });
+  }
+
   // Per-segment context menu (right-click or chip).
   function openSegMenu(seg, x, y) {
     closeSegMenu();
@@ -140,7 +156,8 @@ export async function renderTranscript(root, id) {
 
     const menu = el('div', { class: 'seg-menu' }, [
       el('div', { class: 'seg-menu-head' }, `${langLabel(seg.lang) || 'Unknown'} · ${fmtClock(seg.start)}–${fmtClock(seg.end)}`),
-      item('▶  Play segment', () => playRange(audio, null, seg.start, seg.end)),
+      item('▶  Play segment', () => playTurnRange(seg, false)),
+      item('▶  Play from here', () => playTurnRange(seg, true)),
       el('div', { class: 'seg-menu-label' }, 'Re-transcribe as'),
       item('Dutch', () => retranscribe(seg, 'nld'), seg.lang === 'nld'),
       item('Frisian', () => retranscribe(seg, 'fry'), seg.lang === 'fry'),
@@ -228,7 +245,10 @@ export async function renderTranscript(root, id) {
     const chip = el('button', { class: 'seg-chip', style: 'display:none' });
     let chipSpan = null, hideTimer = null;
     function positionChip(span) {
-      const r = span.getBoundingClientRect(), w = container.getBoundingClientRect();
+      // Anchor to the segment's FIRST line box (a wrapped segment's bounding rect
+      // would span both lines and mis-place the chip).
+      const r = span.getClientRects()[0] || span.getBoundingClientRect();
+      const w = container.getBoundingClientRect();
       chip.style.top = `${r.top - w.top}px`;
       chip.style.left = `${r.left - w.left}px`;
     }
@@ -251,7 +271,18 @@ export async function renderTranscript(root, id) {
     for (const turn of turnsOf()) {
       const c = colorOf(turn.speaker);
       const last = turn.segments[turn.segments.length - 1];
-      const play = el('button', { class: 'seg-play', title: 'Play turn', onclick: () => playRange(audio, play, turn.segments[0].start, last.end) }, '▶');
+      // Play the turn as one continuous span (no seeking between segments — the
+      // inter-segment "gaps" are mostly continuous speech the diarizer split, so
+      // playing straight through sounds natural). We just track position to stop at
+      // the end and highlight the segment currently playing.
+      const segSpans = [];
+      const play = el('button', {
+        class: 'seg-play', title: 'Play turn', 'data-turn-id': turn.segments[0].id,
+        onclick: () => playRanges(audio, play, [[turn.segments[0].start, last.end]], {
+          onTick: (ct) => highlightPlaying(segSpans, ct),
+          onStop: () => highlightPlaying(segSpans, -1),
+        }),
+      }, '▶');
 
       const head = el('div', { class: 'turn-head reading-head' }, [
         play, speakerLabel(turn.speaker),
@@ -268,6 +299,7 @@ export async function renderTranscript(root, id) {
           contenteditable: inaudible ? 'false' : 'true',
           spellcheck: 'false',
         }, inaudible ? '[inaudible]' : (seg.text || ''));
+        segSpans.push({ seg, span });
         if (!inaudible) {
           span.addEventListener('blur', () => {
             if (splitting) return;
@@ -306,23 +338,45 @@ export async function renderTranscript(root, id) {
 let activeBtn = null;
 let stopActive = null;
 
-function playRange(audio, btn, start, end) {
+// Play a list of [start, end] ranges. A single range plays continuously (no seeks);
+// multiple ranges play back-to-back, skipping gaps between them. A rAF loop watches
+// currentTime to stop at the end and to drive optional onTick/onStop callbacks.
+function playRanges(audio, btn, ranges, opts = {}) {
   const wasActive = btn && btn === activeBtn;
   if (stopActive) stopActive();
-  if (wasActive) return;
+  if (wasActive || !ranges.length) return;
 
-  const onTime = () => { if (audio.currentTime >= end) stop(); };
+  let i = 0, raf = 0;
+  function tick() {
+    const ct = audio.currentTime;
+    if (ct >= ranges[i][1]) {
+      i++;
+      if (i >= ranges.length) { stop(); return; }
+      if (audio.currentTime < ranges[i][0]) audio.currentTime = ranges[i][0]; // skip the gap
+    }
+    if (opts.onTick) opts.onTick(ct);
+    raf = requestAnimationFrame(tick);
+  }
   function stop() {
-    audio.removeEventListener('timeupdate', onTime);
+    cancelAnimationFrame(raf);
     audio.pause();
     if (btn) btn.textContent = '▶';
+    if (opts.onStop) opts.onStop();
     activeBtn = null; stopActive = null;
   }
   activeBtn = btn || null; stopActive = stop;
   if (btn) btn.textContent = '⏸';
-  audio.currentTime = start;
+  audio.currentTime = ranges[0][0];
   audio.play();
-  audio.addEventListener('timeupdate', onTime);
+  raf = requestAnimationFrame(tick);
+}
+
+// Highlight the segment span whose range contains the current playback time
+// (pass ct = -1 to clear).
+function highlightPlaying(segSpans, ct) {
+  for (const { seg, span } of segSpans) {
+    span.classList.toggle('seg-playing', ct >= seg.start && ct < seg.end);
+  }
 }
 
 // ── Context menu lifecycle ──────────────────────────────────────────────────
