@@ -1,11 +1,12 @@
-// Transcription detail view.
+// Transcription detail view — a single "reading" view: consecutive same-speaker
+// segments merged into one flowing, editable paragraph per turn.
 //
-// Two view modes over the same segment list (segments are the source of truth):
-//   • Detail  — per-segment rows: play, language badge, "Re-transcribe as" dropdown.
-//   • Reading — consecutive same-speaker segments merged into one flowing, editable
-//               paragraph per turn. Each segment stays a distinct editable run, so
-//               edits preserve per-segment language/timestamps.
-// Split-on-Enter (4b) and find & replace (4c) build on the reading view.
+//   • Edit text inline; each segment is its own editable run, so edits preserve
+//     per-segment language/timestamps.
+//   • Enter splits the turn at the caret (snap to a real boundary, else interpolate).
+//   • Per-segment actions (play, re-transcribe as Dutch/Frisian) live in a context
+//     menu, opened by right-click or the language chip shown on hover/active.
+//   • A "Show language" toggle adds an always-on subtle per-language tint.
 
 import { api } from './api.js';
 import { el, clear, langLabel, toast } from './util.js';
@@ -19,15 +20,14 @@ const SPEAKER_COLORS = [
   { fg: '#e11d48', bg: '#fff1f2', border: '#fecdd3' },
 ];
 
-// Language badge colours — consistent regardless of speaker.
 const LANG_COLORS = {
-  nld: { fg: '#1e40af', bg: '#eff6ff', border: '#bfdbfe' },  // Dutch — blue
-  fry: { fg: '#065f46', bg: '#ecfdf5', border: '#a7f3d0' },  // Frisian — green
+  nld: { fg: '#1e40af', bg: '#eff6ff', border: '#bfdbfe', short: 'NL' },  // Dutch — blue
+  fry: { fg: '#065f46', bg: '#ecfdf5', border: '#a7f3d0', short: 'FY' },  // Frisian — green
 };
-const DEFAULT_LANG_COLOR = { fg: '#6b7280', bg: '#f3f4f6', border: '#e5e7eb' };
+const DEFAULT_LANG_COLOR = { fg: '#6b7280', bg: '#f3f4f6', border: '#e5e7eb', short: '?' };
 const langColor = (l) => LANG_COLORS[l] || DEFAULT_LANG_COLOR;
 
-const VIEW_MODE_KEY = 'tina.viewMode';
+const SHOW_LANG_KEY = 'tina.showLang';
 
 export async function renderTranscript(root, id) {
   clear(root);
@@ -68,9 +68,8 @@ export async function renderTranscript(root, id) {
 
   // ── Shared state & helpers ───────────────────────────────────────────────────
   const audio = el('audio', { controls: '', src: api.audioUrl(t.id), style: 'width:100%' });
-  let mode = localStorage.getItem(VIEW_MODE_KEY) || 'detail';
+  let showLang = localStorage.getItem(SHOW_LANG_KEY) === '1';
 
-  // Speaker → colour by first-appearance order, so colours stay stable across renames.
   function colorOf(spk) {
     const order = [];
     for (const s of t.segments) if (!order.includes(s.speaker)) order.push(s.speaker);
@@ -86,7 +85,6 @@ export async function renderTranscript(root, id) {
     }
   }
 
-  // Group consecutive segments into turns, honouring explicit break_before markers.
   function turnsOf() {
     const turns = [];
     for (const s of t.segments) {
@@ -97,8 +95,6 @@ export async function renderTranscript(root, id) {
     return turns;
   }
 
-  // Click a speaker label to rename it; Enter saves and renames every segment with
-  // that speaker, Escape cancels.
   function speakerLabel(name) {
     const span = el('span', { class: 'turn-speaker editable', style: `color:${colorOf(name).fg}`, title: 'Click to rename', contenteditable: 'false' }, name);
     span.addEventListener('click', () => {
@@ -122,97 +118,59 @@ export async function renderTranscript(root, id) {
     return span;
   }
 
-  // ── View-mode toggle + body ──────────────────────────────────────────────────
-  const toolbar = el('div', { class: 'tx-toolbar' }, viewToggle());
-  const bodyWrap = el('div', { class: 'tx-body' });
+  async function retranscribe(seg, language) {
+    const span = bodyWrap.querySelector(`.seg-edit[data-seg-id="${CSS.escape(String(seg.id))}"]`);
+    if (span) span.classList.add('seg-loading');
+    try {
+      const updated = await api.retranscribeSegment(t.id, seg.id, language);
+      const target = t.segments.find(s => String(s.id) === String(seg.id));
+      target.text = updated.text; target.lang = updated.lang; target.note = 'ok';
+      toast(`Re-transcribed as ${langLabel(language)}`);
+    } catch (e) {
+      toast(`Re-transcribe failed: ${e.message}`);
+    }
+    renderBody();
+  }
+
+  // Per-segment context menu (right-click or chip).
+  function openSegMenu(seg, x, y) {
+    closeSegMenu();
+    const item = (label, onClick, current = false) =>
+      el('div', { class: 'seg-menu-item' + (current ? ' current' : ''), onclick: (e) => { e.stopPropagation(); closeSegMenu(); onClick(); } }, label);
+
+    const menu = el('div', { class: 'seg-menu' }, [
+      el('div', { class: 'seg-menu-head' }, `${langLabel(seg.lang) || 'Unknown'} · ${fmtClock(seg.start)}–${fmtClock(seg.end)}`),
+      item('▶  Play segment', () => playRange(audio, null, seg.start, seg.end)),
+      el('div', { class: 'seg-menu-label' }, 'Re-transcribe as'),
+      item('Dutch', () => retranscribe(seg, 'nld'), seg.lang === 'nld'),
+      item('Frisian', () => retranscribe(seg, 'fry'), seg.lang === 'fry'),
+    ]);
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    document.body.appendChild(menu);
+    // Clamp to the viewport.
+    const r = menu.getBoundingClientRect();
+    if (r.right > innerWidth) menu.style.left = `${Math.max(8, innerWidth - r.width - 8)}px`;
+    if (r.bottom > innerHeight) menu.style.top = `${Math.max(8, y - r.height)}px`;
+  }
+
+  // ── Toolbar ──────────────────────────────────────────────────────────────────
+  const langToggle = el('button', {
+    class: 'toolbar-btn' + (showLang ? ' active' : ''), title: "Highlight each segment's transcribed language",
+    onclick: () => {
+      showLang = !showLang;
+      localStorage.setItem(SHOW_LANG_KEY, showLang ? '1' : '0');
+      langToggle.classList.toggle('active', showLang);
+      bodyWrap.classList.toggle('show-lang', showLang);
+    },
+  }, [el('span', { class: 'lang-swatch' }), 'Show language']);
+
+  const toolbar = el('div', { class: 'tx-toolbar' }, [el('span', { style: 'margin-left:auto' }), langToggle]);
+  const bodyWrap = el('div', { class: 'tx-body' + (showLang ? ' show-lang' : '') });
   transcriptPane.append(toolbar, bodyWrap);
-
-  function viewToggle() {
-    const make = (m, label) => el('button', {
-      class: 'view-btn' + (mode === m ? ' active' : ''),
-      onclick: () => {
-        if (mode === m) return;
-        mode = m;
-        localStorage.setItem(VIEW_MODE_KEY, m);
-        toggle.querySelectorAll('.view-btn').forEach(b => b.classList.toggle('active', b === (m === 'detail' ? detailBtn : readingBtn)));
-        renderBody();
-      },
-    }, label);
-    const detailBtn = make('detail', 'Detail');
-    const readingBtn = make('reading', 'Reading');
-    const toggle = el('div', { class: 'view-toggle' }, [detailBtn, readingBtn]);
-    return toggle;
-  }
-
-  function renderBody() {
-    clear(bodyWrap);
-    closeMenus();
-    if (mode === 'reading') renderReading(bodyWrap);
-    else renderDetail(bodyWrap);
-  }
-
-  // ── Detail view ──────────────────────────────────────────────────────────────
-  function renderDetail(container) {
-    async function retranscribe(seg, language, ddEl) {
-      ddEl.replaceChildren(el('span', { class: 'seg-spinner' }));
-      try {
-        const updated = await api.retranscribeSegment(t.id, seg.id, language);
-        const target = t.segments.find(s => String(s.id) === String(seg.id));
-        target.text = updated.text; target.lang = updated.lang; target.note = 'ok';
-        toast(`Re-transcribed as ${langLabel(language)}`);
-      } catch (e) {
-        toast(`Re-transcribe failed: ${e.message}`);
-      }
-      renderBody();
-    }
-
-    function langDropdown(seg) {
-      const lc = langColor(seg.lang);
-      const badge = el('button', {
-        class: 'lang-badge-btn', title: 'Change language',
-        style: `background:${lc.bg};color:${lc.fg};border:1px solid ${lc.border}`,
-      }, [el('span', {}, langLabel(seg.lang) || '—'), el('span', { class: 'caret' }, '▾')]);
-      const menu = el('div', { class: 'lang-menu', style: 'display:none' }, [
-        el('div', { class: 'lang-menu-label' }, 'Re-transcribe as'),
-        ...[['nld', 'Dutch'], ['fry', 'Frisian']].map(([code, label]) =>
-          el('div', {
-            class: 'lang-menu-item' + (seg.lang === code ? ' current' : ''),
-            onclick: (e) => { e.stopPropagation(); closeMenus(); retranscribe(seg, code, dd); },
-          }, label)),
-      ]);
-      badge.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isOpen = menu.style.display !== 'none';
-        closeMenus();
-        menu.style.display = isOpen ? 'none' : 'block';
-      });
-      const dd = el('div', { class: 'lang-dd' }, [badge, menu]);
-      return dd;
-    }
-
-    const body = el('div', { class: 'transcript-body' });
-    for (const turn of turnsOf()) {
-      const c = colorOf(turn.speaker);
-      const turnEl = el('div', { class: 'turn', style: `border-left:3px solid ${c.border}` });
-      turnEl.appendChild(el('div', { class: 'turn-head' }, speakerLabel(turn.speaker)));
-      for (const seg of turn.segments) {
-        const inaudible = seg.note === 'overlapping_speech';
-        const play = el('button', { class: 'seg-play', title: 'Play', onclick: () => playRange(audio, play, seg.start, seg.end) }, '▶');
-        const text = el('div', { class: 'seg-text-cell' + (inaudible ? ' inaudible' : ''), title: `${fmtClock(seg.start)}–${fmtClock(seg.end)}` },
-          inaudible ? '[inaudible]' : (seg.text || ''));
-        const meta = el('div', { class: 'seg-meta' }, inaudible ? [] : langDropdown(seg));
-        turnEl.appendChild(el('div', { class: 'seg-row' }, [el('div', { class: 'seg-aside' }, play), text, meta]));
-      }
-      body.appendChild(turnEl);
-    }
-    container.appendChild(body);
-    container.appendChild(el('div', { class: 'player-bar' }, audio));
-  }
 
   // ── Reading view ─────────────────────────────────────────────────────────────
   function renderReading(container) {
-    // Set true while a split re-renders, so the removed span's blur handler does
-    // not clobber the just-applied split with its stale text.
     let splitting = false;
 
     function newSegId() {
@@ -220,9 +178,8 @@ export async function renderTranscript(root, id) {
       let n = 0; while (ids.has(String(n))) n++;
       return String(n);
     }
-
     function focusSegStart(id) {
-      const sp = bodyWrap.querySelector(`.seg-edit[data-seg-id="${CSS.escape(String(id))}"]`);
+      const sp = container.querySelector(`.seg-edit[data-seg-id="${CSS.escape(String(id))}"]`);
       if (!sp) return;
       sp.focus();
       const r = document.createRange();
@@ -230,8 +187,6 @@ export async function renderTranscript(root, id) {
       const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
     }
 
-    // Split the turn at the caret. Snaps to a real segment boundary when the caret
-    // is at a segment edge; interpolates by character offset only inside a segment.
     function splitAt(seg, span) {
       const sel = getSelection();
       const offset = (sel && sel.rangeCount && span.contains(sel.anchorNode)) ? sel.anchorOffset : 0;
@@ -241,34 +196,23 @@ export async function renderTranscript(root, id) {
 
       const idx = t.segments.findIndex(s => String(s.id) === String(seg.id));
       const target = t.segments[idx];
-      target.text = full.trim();   // capture any uncommitted inline edit
+      target.text = full.trim();
       let focusId = null;
 
       if (!after) {
-        // Caret at the segment end → snap to its end boundary; next segment in the
-        // turn (if any) begins the new block.
         const next = t.segments[idx + 1];
-        if (next && next.speaker === target.speaker && !next.break_before) {
-          next.break_before = true; focusId = next.id;
-        } else { return; }
+        if (next && next.speaker === target.speaker && !next.break_before) { next.break_before = true; focusId = next.id; }
+        else return;
       } else if (!before) {
-        // Caret at the segment start → snap to its start boundary; this segment
-        // begins the new block (unless it already starts the turn).
         const prev = t.segments[idx - 1];
         const startsTurn = !(prev && prev.speaker === target.speaker && !target.break_before);
         if (startsTurn) return;
         target.break_before = true; focusId = target.id;
       } else {
-        // Caret inside the segment → interpolate the boundary time by char offset.
         const totalChars = full.trim().length || 1;
-        const frac = before.length / totalChars;
-        let mid = target.start + (target.end - target.start) * frac;
+        let mid = target.start + (target.end - target.start) * (before.length / totalChars);
         mid = Math.min(target.end, Math.max(target.start, Math.round(mid * 1000) / 1000));
-        const newSeg = {
-          id: newSegId(), speaker: target.speaker,
-          start: mid, end: target.end, text: after,
-          lang: target.lang, note: target.note || 'ok', break_before: true,
-        };
+        const newSeg = { id: newSegId(), speaker: target.speaker, start: mid, end: target.end, text: after, lang: target.lang, note: target.note || 'ok', break_before: true };
         target.end = mid; target.text = before;
         t.segments.splice(idx + 1, 0, newSeg);
         focusId = newSeg.id;
@@ -280,6 +224,29 @@ export async function renderTranscript(root, id) {
       saveSegments();
     }
 
+    // Floating language chip shown on hover / active.
+    const chip = el('button', { class: 'seg-chip', style: 'display:none' });
+    let chipSpan = null, hideTimer = null;
+    function positionChip(span) {
+      const r = span.getBoundingClientRect(), w = container.getBoundingClientRect();
+      chip.style.top = `${r.top - w.top}px`;
+      chip.style.left = `${r.left - w.left}px`;
+    }
+    function showChip(seg, span) {
+      clearTimeout(hideTimer);
+      chipSpan = span;
+      const lc = langColor(seg.lang);
+      chip.textContent = `${lc.short} ▾`;
+      chip.style.cssText += `;background:${lc.bg};color:${lc.fg};border-color:${lc.border};display:inline-flex`;
+      positionChip(span);
+      chip.onclick = (e) => { e.stopPropagation(); const r = chip.getBoundingClientRect(); openSegMenu(seg, r.left, r.bottom + 2); };
+    }
+    function hideChipSoon() {
+      hideTimer = setTimeout(() => { if (chipSpan !== document.activeElement) { chip.style.display = 'none'; chipSpan = null; } }, 200);
+    }
+    chip.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+    chip.addEventListener('mouseleave', hideChipSoon);
+
     const body = el('div', { class: 'transcript-body' });
     for (const turn of turnsOf()) {
       const c = colorOf(turn.speaker);
@@ -287,45 +254,48 @@ export async function renderTranscript(root, id) {
       const play = el('button', { class: 'seg-play', title: 'Play turn', onclick: () => playRange(audio, play, turn.segments[0].start, last.end) }, '▶');
 
       const head = el('div', { class: 'turn-head reading-head' }, [
-        play,
-        speakerLabel(turn.speaker),
+        play, speakerLabel(turn.speaker),
         el('span', { class: 'turn-time' }, `${fmtClock(turn.segments[0].start)}–${fmtClock(last.end)}`),
       ]);
 
-      // Flowing paragraph: each segment is its own editable run, so edits map back
-      // to exactly one segment (preserving its language/timestamps).
       const para = el('p', { class: 'reading-text' });
       for (const seg of turn.segments) {
         const inaudible = seg.note === 'overlapping_speech';
+        const langClass = seg.lang ? ` lang-${seg.lang}` : '';
         const span = el('span', {
-          class: 'seg-edit' + (inaudible ? ' inaudible' : ''),
+          class: 'seg-edit' + langClass + (inaudible ? ' inaudible' : ''),
           'data-seg-id': seg.id,
           contenteditable: inaudible ? 'false' : 'true',
           spellcheck: 'false',
-          title: `${langLabel(seg.lang) || '—'} · ${fmtClock(seg.start)}–${fmtClock(seg.end)}`,
         }, inaudible ? '[inaudible]' : (seg.text || ''));
         if (!inaudible) {
           span.addEventListener('blur', () => {
             if (splitting) return;
             const newText = span.textContent.trim();
             const target = t.segments.find(s => String(s.id) === String(seg.id));
-            if (target && newText !== (target.text || '')) {
-              target.text = newText;
-              saveSegments();
-            }
+            if (target && newText !== (target.text || '')) { target.text = newText; saveSegments(); }
+            hideChipSoon();
           });
-          span.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); splitAt(seg, span); }
-          });
+          span.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); splitAt(seg, span); } });
+          span.addEventListener('contextmenu', (e) => { e.preventDefault(); openSegMenu(seg, e.clientX, e.clientY); });
+          span.addEventListener('mouseenter', () => showChip(seg, span));
+          span.addEventListener('mouseleave', hideChipSoon);
+          span.addEventListener('focus', () => showChip(seg, span));
         }
         para.appendChild(span);
         para.appendChild(document.createTextNode(' '));
       }
-
       body.appendChild(el('div', { class: 'turn reading-turn', style: `border-left:3px solid ${c.border}` }, [head, para]));
     }
     container.appendChild(body);
+    container.appendChild(chip);
     container.appendChild(el('div', { class: 'player-bar' }, audio));
+  }
+
+  function renderBody() {
+    closeSegMenu();
+    clear(bodyWrap);
+    renderReading(bodyWrap);
   }
 
   renderBody();
@@ -337,29 +307,31 @@ let activeBtn = null;
 let stopActive = null;
 
 function playRange(audio, btn, start, end) {
-  const wasActive = btn === activeBtn;
+  const wasActive = btn && btn === activeBtn;
   if (stopActive) stopActive();
-  if (wasActive) return; // re-click on the playing item → stop (toggle off)
+  if (wasActive) return;
 
   const onTime = () => { if (audio.currentTime >= end) stop(); };
   function stop() {
     audio.removeEventListener('timeupdate', onTime);
     audio.pause();
-    btn.textContent = '▶';
+    if (btn) btn.textContent = '▶';
     activeBtn = null; stopActive = null;
   }
-  activeBtn = btn; stopActive = stop;
-  btn.textContent = '⏸';
+  activeBtn = btn || null; stopActive = stop;
+  if (btn) btn.textContent = '⏸';
   audio.currentTime = start;
   audio.play();
   audio.addEventListener('timeupdate', onTime);
 }
 
-// Close any open language dropdown when clicking elsewhere.
-function closeMenus() {
-  document.querySelectorAll('.lang-menu').forEach(m => { m.style.display = 'none'; });
+// ── Context menu lifecycle ──────────────────────────────────────────────────
+
+function closeSegMenu() {
+  document.querySelectorAll('.seg-menu').forEach(m => m.remove());
 }
-document.addEventListener('click', closeMenus);
+document.addEventListener('click', closeSegMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSegMenu(); });
 
 function fmtClock(s) {
   const m = Math.floor(s / 60), sec = Math.floor(s % 60);

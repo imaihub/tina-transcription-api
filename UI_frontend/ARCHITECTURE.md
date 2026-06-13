@@ -95,15 +95,19 @@ UI_frontend/
 ```
 
 ## Transcript editing model (item 4)
-Two view modes over the **same segment list** (segments stay the source of truth):
-- **Detail view** — per-segment rows: play, language badge, "Re-transcribe as" dropdown.
-- **Reading view** — consecutive same-speaker segments merged into one flowing,
-  editable paragraph per turn; for correcting text and splitting.
+A single **reading view** over the segment list (segments stay the source of truth):
+consecutive same-speaker segments are merged into one flowing, editable paragraph per
+turn. (An earlier per-segment "Detail" view was removed as overkill — language errors
+are rare; all per-segment actions now live in a context menu.)
 
-Decisions:
-- **Edits preserve segments.** In the reading view each segment is a distinct
-  editable run within the paragraph; an edit updates only that segment's `text`, so
-  per-segment language + timestamps (and retranscribe) survive editing.
+- **Edits preserve segments.** Each segment is a distinct editable run within the
+  paragraph; an edit updates only that segment's `text`, so per-segment language +
+  timestamps (and retranscribe) survive editing.
+- **Per-segment actions via context menu.** Right-click a segment — or click the
+  language chip shown on hover/active — to open a menu: play segment, re-transcribe as
+  Dutch/Frisian (current marked). Hover tints by language (blue=Dutch, green=Frisian);
+  the focused segment shows a pronounced boundary. A "Show language" toolbar toggle
+  turns on an always-on subtle per-language tint.
 - **Turn grouping** = consecutive segments with the same speaker *and* no explicit
   break. A `break_before` flag on a segment forces a new turn even for the same
   speaker — needed so a split into two same-named blocks doesn't re-merge.
