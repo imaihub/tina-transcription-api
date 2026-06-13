@@ -9,7 +9,8 @@ The service is exposed through an OpenAI-compatible transcription route
 `base_url` change, while the Frisian/Dutch language and speaker information is preserved
 in an extra response block. See the [API](#api) section for details.
 
-The project consists of the api (in the folder /api), and a minimal example frontend in /api_frontend
+The project consists of the API (in `/api`), a minimal developer test frontend
+(`/api_frontend`), and a more polished, user-facing frontend (`/UI_frontend`).
 
 # IMPORTANT! Notes on usage
 This is research code developed for the TINA project, in collaboration with Municipality 
@@ -84,6 +85,36 @@ uv run uvicorn main:app --port 8080
 Then open http://localhost:8080 in your browser.
 
 On a remote VM, use `--host 0.0.0.0` so the frontend is reachable from outside, and set `API_URL` in `api_frontend/.env` to the VM's external IP (see [VM deployment](#vm-deployment)).
+
+
+## User-facing frontend (`UI_frontend`)
+A more polished, user-facing web app for organizing and editing transcriptions. Unlike
+`api_frontend` (which calls the API directly), the browser talks only to the
+`UI_frontend` backend, which persists data in SQLite and calls the transcription API
+server-to-server — so the API key stays on the server.
+
+Key features:
+- **Folders** of named transcriptions, with search and a recent-files sidebar.
+- **Upload + transcribe** with language and folder settings.
+- **Reading-view editor**: edit text inline, rename speakers, split a turn on Enter,
+  per-segment play and right-click "re-transcribe as Dutch/Frisian", find & replace,
+  and a per-language highlight toggle.
+- **Copy** to clipboard and **export** to `.txt` / `.json`.
+
+Data is stored under `UI_frontend/data/` (SQLite DB + uploaded audio).
+
+To run it locally (the transcription API in `/api` must be running first):
+
+```bash
+cd UI_frontend
+uv sync
+cp .env_template .env        # set TRANSCRIPTION_API_KEY to match api/.env
+uv run uvicorn main:app --port 8090
+```
+
+Then open http://localhost:8090 in your browser. See
+[`UI_frontend/README.md`](UI_frontend/README.md) for full setup, configuration, and
+[`UI_frontend/ARCHITECTURE.md`](UI_frontend/ARCHITECTURE.md) for the design.
 
 
 ## VM deployment
