@@ -1,6 +1,18 @@
 /* TINA Transcribe — UI frontend */
 
 :root {
+  --accent:        #3b7fed;
+  --accent-dark:   #286cd9;
+  --accent-soft:   #e9f1fe;
+  --sidebar-bg:    #f3f7ff;
+  --border:        #e5e7eb;
+  --text:          #1f2937;
+  --text-muted:    #6b7280;
+  --bg:            #ffffff;
+  --row-hover:     #f5f9ff;
+  --danger:        #dc2626;
+}
+/* :root {
   --accent:        #7c3aed;
   --accent-dark:   #6d28d9;
   --accent-soft:   #ede9fe;
@@ -11,7 +23,7 @@
   --bg:            #ffffff;
   --row-hover:     #faf5ff;
   --danger:        #dc2626;
-}
+} */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
