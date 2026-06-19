@@ -2,7 +2,8 @@
 Standalone FastAPI service that diarizes an audio file and transcribes each 
 speaker turn using a Frisian or Dutch MMS beam-search model, using a common Frisian/Dutch
 kenlm model. In dual language mode, the choice between Frisian and Dutch is made with a 
-trained language-ID classifier.
+trained language-ID classifier. Transcribed text is then optionally punctuated and
+capitalized by a fine-tuned multilingual punctuation model (see `PUNCT_MODEL`).
 
 The service is exposed through an OpenAI-compatible transcription route
 (`POST /v1/audio/transcriptions`), so existing OpenAI clients can use it with only a
@@ -173,6 +174,7 @@ All configuration lives in `api/.env`. The file is gitignored — use `api/.env_
 | `ADAPTER_DIR` | Yes | Directory containing the finetuned adapter files (`adapter.fry.safetensors`, `adapter.nld.safetensors`). |
 | `KENLM_MODEL_PATH` | Yes | Path to the shared KenLM ARPA file (trained on both Frisian and Dutch). |
 | `LANG_ID_MODEL_PATH` | Yes | Path to the language-ID classifier `.pkl` produced by `LANG_ID_VM/train_lid.py`. |
+| `PUNCT_MODEL` | No | Fine-tuned punctuation/capitalization model (local directory or HF id). When set, transcribed text is punctuated and sentence-start capitalized. Blank → transcripts stay lowercase and unpunctuated. |
 | `MODEL_CACHE_DIR` | No | Directory for caching HuggingFace model weights. Defaults to `~/.cache/huggingface`. |
 | `MIN_SEGMENT_DUR` | No | Minimum speaker segment duration in seconds. Default: `0.3`. |
 | `PAD_S` | No | Padding added around each segment before transcription. Default: `0.1`. |

@@ -23,6 +23,11 @@ KENLM_MODEL_PATH = Path(os.getenv("KENLM_MODEL_PATH", ""))
 # Required: trained language-ID classifier (.pkl produced by LANG_ID_VM).
 LANG_ID_MODEL_PATH = os.getenv("LANG_ID_MODEL_PATH", "")
 
+# Optional: fine-tuned punctuation/capitalization model (local directory or HF id).
+# Restores punctuation and sentence-start capitalization on transcribed text.
+# Leave blank to disable — transcripts then stay lowercase and unpunctuated.
+PUNCT_MODEL_DIR = os.getenv("PUNCT_MODEL_DIR", "")
+
 # Dataset paths (used by the evaluation script)
 CV_FRY_CLEAN_DIR      = os.getenv("CV_FRY_CLEAN_DIR",      "")
 CV_FRY_AUDIO_DIR      = os.getenv("CV_FRY_AUDIO_DIR",      "")

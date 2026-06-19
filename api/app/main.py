@@ -52,6 +52,7 @@ from .hybrid import run_hybrid
 from .kenlm import decoder_ready, rebuild_decoder
 from .lang_id import load_lang_id
 from .models import load_model
+from .punctuate import load_punctuation, punct_available, restore, restore_batch
 from .utils import load_audio
 
 _AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"}
@@ -114,6 +115,9 @@ async def lifespan(app: FastAPI):
 
     # Load pyannote diarization pipeline
     load_pipeline()
+
+    # Load the punctuation/capitalization model (optional — no-op if PUNCT_MODEL_DIR unset)
+    load_punctuation()
 
     yield
 
@@ -398,6 +402,9 @@ async def transcribe_segment(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}")
 
+    if text and punct_available():
+        text = await _run_in_thread(restore, text)
+
     return SegmentTranscription(text=text or "", lang=lang or language, start=start, end=end)
 
 
@@ -459,6 +466,15 @@ async def _process(
             lang=lang,
             note="ok",
         ))
+
+    # Restore punctuation + capitalization on the transcribed segments
+    # (no-op when no punctuation model is configured).
+    if punct_available():
+        idx = [i for i, s in enumerate(segments) if s.note == "ok" and s.text]
+        if idx:
+            restored = await _run_in_thread(restore_batch, [segments[i].text for i in idx])
+            for i, text in zip(idx, restored):
+                segments[i].text = text
 
     speakers: dict[str, dict] = {}
     for seg in segments:
