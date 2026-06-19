@@ -176,6 +176,7 @@ class TranscribeRequest(BaseModel):
     filename:          str
     recording_context: str = "GENERAL"
     language:          str = "nld+fry"
+    punctuate:         bool = True
 
 
 class SegmentResult(BaseModel):
@@ -280,7 +281,7 @@ async def transcribe(req: TranscribeRequest):
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail=f"Audio file not found: {req.filename}")
 
-    return await _transcribe_path(audio_path, req.language)
+    return await _transcribe_path(audio_path, req.language, req.punctuate)
 
 
 @app.post("/upload-transcribe", response_model=TranscribeResponse, dependencies=[Depends(require_api_key)])
@@ -288,6 +289,7 @@ async def upload_transcribe(
     file: UploadFile = File(...),
     recording_context: str = Form("GENERAL"),
     language: str = Form("nld+fry"),
+    punctuate: bool = Form(True),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in _AUDIO_EXTENSIONS:
@@ -299,7 +301,7 @@ async def upload_transcribe(
         tmp_path = Path(tmp.name)
 
     try:
-        return await _transcribe_path(tmp_path, language)
+        return await _transcribe_path(tmp_path, language, punctuate)
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -318,6 +320,7 @@ async def openai_transcriptions(
     response_format: str = Form("diarized_json"),
     prompt: str | None = Form(None),               # accepted for compatibility; ignored
     temperature: float | None = Form(None),        # accepted for compatibility; ignored
+    punctuate: bool = Form(True),                  # restore punctuation + capitalization
 ):
     """OpenAI-compatible transcription endpoint.
 
@@ -341,7 +344,7 @@ async def openai_transcriptions(
         tmp_path = Path(tmp.name)
 
     try:
-        segments, speakers, total_duration = await _process(tmp_path, _map_language(language))
+        segments, speakers, total_duration = await _process(tmp_path, _map_language(language), punctuate)
     finally:
         tmp_path.unlink(missing_ok=True)
 
@@ -363,6 +366,7 @@ async def transcribe_segment(
     start: float = Form(...),
     end: float = Form(...),
     language: str = Form(...),
+    punctuate: bool = Form(True),
 ):
     """Transcribe a single time range of an audio file in a forced language.
 
@@ -402,7 +406,7 @@ async def transcribe_segment(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}")
 
-    if text and punct_available():
+    if text and punctuate and punct_available():
         text = await _run_in_thread(restore, text)
 
     return SegmentTranscription(text=text or "", lang=lang or language, start=start, end=end)
@@ -416,7 +420,7 @@ def _load_audio_only(path: Path):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 async def _process(
-    audio_path: Path, language: str,
+    audio_path: Path, language: str, punctuate: bool = True,
 ) -> tuple[list[SegmentResult], dict[str, SpeakerSummary], float]:
     """Run diarization + per-segment transcription on a resolved audio file path.
 
@@ -468,8 +472,8 @@ async def _process(
         ))
 
     # Restore punctuation + capitalization on the transcribed segments
-    # (no-op when no punctuation model is configured).
-    if punct_available():
+    # (skipped when the caller sets punctuate=false or no model is configured).
+    if punctuate and punct_available():
         idx = [i for i, s in enumerate(segments) if s.note == "ok" and s.text]
         if idx:
             restored = await _run_in_thread(restore_batch, [segments[i].text for i in idx])
@@ -505,9 +509,9 @@ async def _process(
     return segments, speaker_summary, total_duration
 
 
-async def _transcribe_path(audio_path: Path, language: str) -> TranscribeResponse:
+async def _transcribe_path(audio_path: Path, language: str, punctuate: bool = True) -> TranscribeResponse:
     """Run the pipeline and return the native TINA response shape."""
-    segments, speaker_summary, total_duration = await _process(audio_path, language)
+    segments, speaker_summary, total_duration = await _process(audio_path, language, punctuate)
     return TranscribeResponse(
         segments=segments,
         speakers=speaker_summary,

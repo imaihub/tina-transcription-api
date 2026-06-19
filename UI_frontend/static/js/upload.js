@@ -27,6 +27,7 @@ export async function renderNewTranscript(root) {
     name: '',
     folderId: active ? active.id : null,
     language: 'nld+fry',
+    punctuate: true,
     busy: false,
   };
 
@@ -121,11 +122,21 @@ function settingsPanel(state) {
   }, LANG_OPTIONS.map(o => el('option', { value: o.value }, o.label)));
   langSelect.value = state.language;
 
+  const punctToggle = el('label', { class: 'checkbox-row' }, [
+    el('input', {
+      type: 'checkbox',
+      checked: state.punctuate ? 'checked' : null,
+      onchange: (e) => { state.punctuate = e.target.checked; },
+    }),
+    ' Punctuate & capitalize',
+  ]);
+
   return el('div', { class: 'settings-card' }, [
     el('h3', { class: 'settings-title' }, 'Settings'),
     field('Transcription name', nameInput),
     field('Save to folder', folderSelect),
     field('Language', langSelect),
+    field('Punctuation', punctToggle),
     el('p', { class: 'settings-note' },
       'Speaker diarization runs automatically. Choosing an exact number of speakers and custom spelling will be available once the transcription API supports them.'),
   ]);
@@ -147,6 +158,7 @@ async function transcribe(root, state) {
     form.append('folder_id', String(state.folderId));
     form.append('name', state.name.trim());
     form.append('language', state.language);
+    form.append('punctuate', String(state.punctuate));
     const t = await api.createTranscription(form);
     setActiveFolderId(state.folderId);
     refreshSidebar();

@@ -123,6 +123,7 @@ async def api_create_transcription(
     folder_id: int = Form(...),
     name: str | None = Form(None),
     language: str = Form("nld+fry"),
+    punctuate: bool = Form(True),
 ):
     if not db.get_folder(folder_id):
         raise HTTPException(status_code=400, detail="Folder not found")
@@ -132,7 +133,7 @@ async def api_create_transcription(
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {suffix or '(none)'}")
 
     content = await file.read()
-    raw = await _call_transcription_api(content, file.filename or "audio", language)
+    raw = await _call_transcription_api(content, file.filename or "audio", language, punctuate)
 
     segments = _merge_segments(raw)
     audio_filename = f"{uuid.uuid4().hex}{suffix}"
@@ -240,11 +241,12 @@ async def _post_to_api(path: str, content: bytes, filename: str, data: dict) -> 
     return resp.json()
 
 
-async def _call_transcription_api(content: bytes, filename: str, language: str) -> dict:
+async def _call_transcription_api(content: bytes, filename: str, language: str, punctuate: bool = True) -> dict:
     """Full diarized transcription of an uploaded file."""
     return await _post_to_api(
         "/v1/audio/transcriptions", content, filename,
-        {"response_format": "diarized_json", "language": language},
+        {"response_format": "diarized_json", "language": language,
+         "punctuate": str(punctuate).lower()},
     )
 
 

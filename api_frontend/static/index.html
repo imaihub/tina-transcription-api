@@ -267,6 +267,7 @@
     <label><input type="radio" name="language" value="nld+fry" checked> NLD + FRY</label>
     <label><input type="radio" name="language" value="fry"> Frisian only</label>
     <label><input type="radio" name="language" value="nld"> Dutch only</label>
+    <label style="margin-left:16px;"><input type="checkbox" id="punctuate" checked> Punctuate &amp; capitalize</label>
   </div>
 
   <div id="status"></div>
@@ -468,22 +469,24 @@
   // in the Response panel.
   // Render the actual outgoing request as an equivalent curl command. The real call
   // is a multipart/form-data POST (file upload), so it can't be shown as a JSON body.
-  function describeRequest(base, filename, language) {
+  function describeRequest(base, filename, language, punctuate) {
     const lines = [`curl -X POST ${base}/v1/audio/transcriptions`];
     if (apiKeyInput.value.trim()) lines.push(`-H "X-API-Key: <API_KEY>"`);
     lines.push(`-F "file=@${filename}"`);
     lines.push(`-F "response_format=diarized_json"`);
     lines.push(`-F "language=${language}"`);
+    lines.push(`-F "punctuate=${punctuate}"`);
     return lines.join(' \\\n  ');
   }
 
-  async function runTranscription(base, file, filename, language) {
+  async function runTranscription(base, file, filename, language, punctuate) {
     const formData = new FormData();
     formData.append('file', file, filename);
     formData.append('response_format', 'diarized_json');
     formData.append('language', language);
+    formData.append('punctuate', punctuate);
 
-    jsonRequest.textContent = describeRequest(base, filename, language);
+    jsonRequest.textContent = describeRequest(base, filename, language, punctuate);
 
     const resp = await fetch(`${base}/v1/audio/transcriptions`, {
       method:  'POST',
@@ -539,6 +542,7 @@
     setStatus('<span class="spinner"></span>Transcribing… (this may take a while)');
 
     const language = document.querySelector('input[name=language]:checked').value;
+    const punctuate = document.getElementById('punctuate').checked;
 
     try {
       // The OpenAI endpoint only accepts uploads, so fetch the server-side file first.
@@ -547,7 +551,7 @@
       if (!fileResp.ok) throw new Error(`Could not fetch ${filename} (HTTP ${fileResp.status})`);
       const blob = await fileResp.blob();
 
-      await runTranscription(base, blob, filename, language);
+      await runTranscription(base, blob, filename, language, punctuate);
     } catch (e) {
       setStatus('Request failed: ' + e.message, true);
     } finally {
@@ -567,9 +571,10 @@
     setStatus('<span class="spinner"></span>Uploading and transcribing… (this may take a while)');
 
     const language = document.querySelector('input[name=language]:checked').value;
+    const punctuate = document.getElementById('punctuate').checked;
 
     try {
-      await runTranscription(base, file, file.name, language);
+      await runTranscription(base, file, file.name, language, punctuate);
     } catch (e) {
       setStatus('Request failed: ' + e.message, true);
     } finally {
